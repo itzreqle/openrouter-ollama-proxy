@@ -1,0 +1,21 @@
+# Binaries
+/bin/
+/dist/
+/orollama
+*.exe
+*.test
+
+# Env / secrets
+.env
+.env.local
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Go
+vendor/
+coverage.out
+coverage.html
