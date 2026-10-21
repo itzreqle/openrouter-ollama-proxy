@@ -209,35 +209,108 @@ sequenceDiagram
   P-->>CC: Anthropic response
 ```
 
-In a shell (with the proxy already running):
+### Recommended: plain `claude` (auto proxy)
+
+Install once (symlinks the helper and adds a small shell hook):
 
 ```bash
-export ANTHROPIC_BASE_URL="http://127.0.0.1:8082"
-export ANTHROPIC_AUTH_TOKEN="local-dev-token"   # same as PROXY_AUTH_TOKEN
-export ANTHROPIC_API_KEY=""                     # must be empty
+cd ~/Projects/applications/openrouter-ollama-proxy
+make install-cli
+source ~/.zshrc
+```
+
+Daily workflow:
+
+```bash
+# terminal 1 — start the proxy
+cd ~/Projects/applications/openrouter-ollama-proxy
+make run
+
+# terminal 2 — any project; just run claude
+cd ~/Projects/websites/smart
 claude
 ```
 
-Inside Claude Code:
+When the proxy is **up**, the shell hook prints something like:
+
+```text
+orollama: proxy ON  http://127.0.0.1:8082
+  provider  OpenRouter + local Ollama
+  opus      openrouter/nvidia/nemotron-3-ultra-550b-a55b:free
+  sonnet    openrouter/minimax/minimax-m3.1-flash:free
+  haiku     openrouter/cohere/north-mini-code:free
+```
+
+Then Claude Code’s model picker shows those as Custom Opus / Sonnet / Haiku.
+
+When the proxy is **down**, `claude` runs normally (no gateway) and prints `orollama: proxy OFF`.
+
+You can still call the helper explicitly: `claude-orollama` or `make claude`.
+
+Optional overrides:
+
+| Variable | Meaning |
+| --- | --- |
+| `OROLLAMA_ENV` | Path to `.env` (default: this repo’s `.env`) |
+| `OROLLAMA_URL` | Proxy URL (default: `http://127.0.0.1:8082`) |
+
+### Manual exports (if you prefer)
+
+Use an **absolute** path to `.env` — a relative `.env` fails when your cwd is another project:
+
+```bash
+PROXY_ENV="$HOME/Projects/applications/openrouter-ollama-proxy/.env"
+
+export ANTHROPIC_BASE_URL="http://127.0.0.1:8082"
+export ANTHROPIC_AUTH_TOKEN="$(grep '^PROXY_AUTH_TOKEN=' "$PROXY_ENV" | cut -d= -f2-)"
+export ANTHROPIC_API_KEY=""
+export ANTHROPIC_DEFAULT_OPUS_MODEL="openrouter/nvidia/nemotron-3-ultra-550b-a55b:free"
+export ANTHROPIC_DEFAULT_SONNET_MODEL="openrouter/minimax/minimax-m3.1-flash:free"
+export ANTHROPIC_DEFAULT_HAIKU_MODEL="openrouter/cohere/north-mini-code:free"
+
+cd ~/Projects/websites/smart   # or any project
+claude
+```
+
+### Important: use `claude`, not `ollama launch claude`
+
+| Command | Uses | OpenRouter via orollama? |
+| --- | --- | --- |
+| `claude` (with `make install-cli` hook) when proxy is up | Proxy on `:8082` | Yes |
+| `claude-orollama` / `make claude` | Proxy on `:8082` | Yes |
+| `ollama launch claude` | Ollama’s own catalog / cloud models | No |
+
+### Verify inside Claude Code
 
 ```text
 /status
 ```
 
-You should see `Anthropic base URL: http://127.0.0.1:8082`.
+You should see `Anthropic base URL: http://127.0.0.1:8082`. Your Sonnet pick may appear as a custom model such as `openrouter/minimax/minimax-m3.1-flash:free`.
 
 If you previously logged into Anthropic, run `/logout` once, quit, and relaunch.
 
-Optional role mapping in `.env`:
+Claude Code may show harmless notices about custom / non-Anthropic models — that is expected for OpenRouter `:free` ids.
+
+Default role mapping in `.env` uses **OpenRouter `:free` models** with tool calling (catalog snapshot Oct 2026):
+
+| Claude role | Env | OpenRouter model | Why |
+| --- | --- | --- | --- |
+| Opus | `MODEL_OPUS` | `nvidia/nemotron-3-ultra-550b-a55b:free` | Largest free agent/reasoning MoE (550B / 55B active), 1M context, strong multi-step coding agents |
+| Sonnet / default | `MODEL_SONNET`, `MODEL` | `minimax/minimax-m3.1-flash:free` | Top free weekly usage; strong coding & agentic tasks; 1M context |
+| Haiku | `MODEL_HAIKU` | `cohere/north-mini-code:free` | Coding-specialized small MoE (30B / 3B active); fast tool use; 256K context |
 
 ```bash
-MODEL_OPUS=openrouter/anthropic/claude-opus-4
-MODEL_SONNET=openrouter/anthropic/claude-sonnet-4
-MODEL_HAIKU=ollama/qwen3-coder
-MODEL=openrouter/anthropic/claude-sonnet-4
+MODEL_OPUS=openrouter/nvidia/nemotron-3-ultra-550b-a55b:free
+MODEL_SONNET=openrouter/minimax/minimax-m3.1-flash:free
+MODEL_HAIKU=openrouter/cohere/north-mini-code:free
+MODEL=openrouter/minimax/minimax-m3.1-flash:free
 ```
 
-**Note:** OpenRouter’s Anthropic Skin is guaranteed for Anthropic first-party models. Other OpenRouter models may work for coding agents but are best-effort for tool use.
+**Notes:**
+- Free models are rate-limited (often 20 RPM; 50/day until you have bought ≥ $10 credits, then 1000/day). See [OpenRouter limits](https://openrouter.ai/docs/api/reference/limits).
+- `:free` catalog changes; check [openrouter.ai/models?q=:free](https://openrouter.ai/models?q=%3Afree).
+- Claude Code is only *guaranteed* with Anthropic first-party models; free non-Anthropic models are best-effort for tool use.
 
 ---
 
