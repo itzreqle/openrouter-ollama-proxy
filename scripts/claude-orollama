@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# Launch Claude Code through the local orollama proxy.
+# Works from any directory — loads secrets/models from this repo's .env.
+set -euo pipefail
+
+_source="${BASH_SOURCE[0]}"
+while [[ -L "$_source" ]]; do
+  _dir="$(cd -P "$(dirname "$_source")" && pwd)"
+  _source="$(readlink "$_source")"
+  [[ "$_source" != /* ]] && _source="$_dir/$_source"
+done
+ROOT="$(cd -P "$(dirname "$_source")/.." && pwd)"
+# shellcheck source=lib/orollama-env.sh
+source "$ROOT/scripts/lib/orollama-env.sh"
+
+ENV_FILE="${OROLLAMA_ENV:-$ROOT/.env}"
+PROXY_URL="${OROLLAMA_URL:-http://127.0.0.1:8082}"
+
+if [[ ! -f "$ENV_FILE" ]]; then
+  echo "orollama: missing $ENV_FILE (copy .env.example → .env first)" >&2
+  exit 1
+fi
+
+if ! command -v claude >/dev/null 2>&1; then
+  echo "orollama: 'claude' not found on PATH." >&2
+  echo "Install: curl -fsSL https://claude.ai/install.sh | bash" >&2
+  exit 1
+fi
+
+if ! orollama_proxy_up "$PROXY_URL"; then
+  echo "orollama: proxy not reachable at $PROXY_URL" >&2
+  echo "Start it: cd \"$ROOT\" && make run" >&2
+  exit 1
+fi
+
+orollama_export_claude_env "$ENV_FILE" "$PROXY_URL"
+orollama_print_status "$PROXY_URL"
+
+# Prefer the real binary so a shell function named claude cannot recurse.
+if [[ -x "${HOME}/.local/bin/claude" ]]; then
+  exec "${HOME}/.local/bin/claude" "$@"
+fi
+exec command claude "$@"
