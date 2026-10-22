@@ -10,13 +10,14 @@ permissions:
 
 jobs:
   release:
-    runs-on: ubuntu-latest
+    # Pin until ubuntu-latest settles on 26.x (runner-images#14748).
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
@@ -47,9 +48,10 @@ jobs:
           ls -la dist
 
       - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: dist/*
           generate_release_notes: true
+          # GitHub always attaches Source code (zip/tar.gz) to the release.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
