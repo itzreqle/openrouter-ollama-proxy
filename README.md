@@ -172,8 +172,11 @@ Copy [`.env.example`](.env.example) to `.env`.
 | `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | OpenRouter API root |
 | `OLLAMA_BASE_URL` | `http://127.0.0.1:11434` | Local Ollama |
 | `PROXY_AUTH_TOKEN` | empty | If set, clients must send `Authorization: Bearer …` or `x-api-key` |
-| `MODEL_OPUS` / `MODEL_SONNET` / `MODEL_HAIKU` / `MODEL` | — | Claude Code role aliases |
-| `OPENROUTER_FREE_ONLY` | `false` | List only OpenRouter ids containing `:free` |
+| `MODEL_OPUS` / `MODEL_SONNET` / `MODEL_HAIKU` / `MODEL` | empty | Claude Code role aliases; leave empty to auto-pick from ranked catalog |
+| `OPENROUTER_SORT` | `intelligence-high-to-low` | OpenRouter models list sort (website order) |
+| `OPENROUTER_FREE_ONLY` | `true` | Prefer ids containing `:free` |
+| `OPENROUTER_TOOLS_ONLY` | `true` | Prefer tool-capable models for auto-pick |
+| `CATALOG_CACHE_SECONDS` | `600` | How often to refresh the OpenRouter ranked catalog |
 | `OLLAMA_TAG_CACHE_SECONDS` | `30` | How often to refresh local model names |
 
 ---
@@ -318,23 +321,29 @@ claude
 
 You should see `Anthropic base URL: http://127.0.0.1:8082`. Your Sonnet pick may appear as a custom model such as `openrouter/minimax/minimax-m3.1-flash:free`.
 
-If you previously logged into Anthropic, run `/logout` once, quit, and relaunch.
+If you previously logged into Anthropic, run `/logout` once, quit, and relaunch. Dual Anthropic login + gateway token causes auth warnings.
 
-Claude Code may show harmless notices about custom / non-Anthropic models — that is expected for OpenRouter `:free` ids.
+### Dynamic catalog (default)
 
-Default role mapping in `.env` uses **OpenRouter `:free` models** with tool calling (catalog snapshot Oct 2026):
+With `MODEL_*` left empty, the proxy fetches OpenRouter’s models sorted by **intelligence high → low** (same order as the website), optionally filtered to `:free` + tool-capable, and auto-assigns:
 
-| Claude role | Env | OpenRouter model | Why |
-| --- | --- | --- | --- |
-| Opus | `MODEL_OPUS` | `nvidia/nemotron-3-ultra-550b-a55b:free` | Largest free agent/reasoning MoE (550B / 55B active), 1M context, strong multi-step coding agents |
-| Sonnet / default | `MODEL_SONNET`, `MODEL` | `minimax/minimax-m3.1-flash:free` | Top free weekly usage; strong coding & agentic tasks; 1M context |
-| Haiku | `MODEL_HAIKU` | `cohere/north-mini-code:free` | Coding-specialized small MoE (30B / 3B active); fast tool use; 256K context |
+| Claude role | Auto pick |
+| --- | --- |
+| Opus | Rank #1 |
+| Sonnet / default | Rank #2 |
+| Haiku | Rank #3 |
+
+Resolved ids and context length are written to `~/.cache/orollama/resolved.env`. Shell/PowerShell hooks load that file and set:
+
+- `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1`
+- `CLAUDE_CODE_MAX_CONTEXT_TOKENS=<context_length>`
+
+so Claude Code stops assuming a 200k window for unknown gateway model ids.
+
+Pin any role by setting `MODEL_OPUS` / `MODEL_SONNET` / `MODEL_HAIKU` / `MODEL` in `.env` (overrides auto). Inspect the live catalog:
 
 ```bash
-MODEL_OPUS=openrouter/nvidia/nemotron-3-ultra-550b-a55b:free
-MODEL_SONNET=openrouter/minimax/minimax-m3.1-flash:free
-MODEL_HAIKU=openrouter/cohere/north-mini-code:free
-MODEL=openrouter/minimax/minimax-m3.1-flash:free
+curl -s http://127.0.0.1:8082/orollama/catalog | jq .
 ```
 
 **Notes:**
@@ -409,8 +418,9 @@ ollama run qwen3-coder
 | `GET` | `/healthz` | Upstream status JSON |
 | `POST` | `/v1/messages` | Anthropic Messages (passthrough) |
 | `POST` | `/v1/chat/completions` | OpenAI chat (passthrough) |
-| `GET` | `/v1/models` | Merged OpenAI model list |
-| `GET` | `/api/tags` | Merged Ollama-format catalog |
+| `GET` | `/v1/models` | Merged OpenAI model list (Ollama + ranked OpenRouter) |
+| `GET` | `/api/tags` | Merged Ollama-format catalog (same ranking) |
+| `GET` | `/orollama/catalog` | Debug: resolved roles + ranked OpenRouter entries |
 | `POST` | `/api/show` | Ollama show or synthetic OpenRouter metadata |
 | `POST` | `/api/chat` | Ollama passthrough or OpenRouter translator |
 
@@ -421,6 +431,7 @@ ollama run qwen3-coder
 ```text
 cmd/orollama/          # main entrypoint
 internal/config/       # env + .env loading
+internal/catalog/      # ranked OpenRouter cache + auto Opus/Sonnet/Haiku
 internal/model/        # routing, aliases, tag cache
 internal/upstream/     # OpenRouter + Ollama HTTP clients
 internal/translate/    # Ollama chat ↔ OpenAI (OpenRouter path only)
