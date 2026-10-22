@@ -16,8 +16,11 @@ func TestResolvePrefixes(t *testing.T) {
 	}{
 		{"ollama/qwen3-coder", BackendOllama, "qwen3-coder"},
 		{"ollama:llama3", BackendOllama, "llama3"},
+		{"ollama-claude/qwen3-coder", BackendOllama, "qwen3-coder"},
 		{"openrouter/anthropic/claude-sonnet-4", BackendOpenRouter, "anthropic/claude-sonnet-4"},
 		{"openrouter:deepseek/deepseek-r1", BackendOpenRouter, "deepseek/deepseek-r1"},
+		{"openrouter-claude/minimax/minimax-m3.1-flash:free", BackendOpenRouter, "minimax/minimax-m3.1-flash:free"},
+		{"openrouter-claude/minimax/minimax-m3.1-flash:free[1m]", BackendOpenRouter, "minimax/minimax-m3.1-flash:free"},
 		{"deepseek/deepseek-r1:free", BackendOpenRouter, "deepseek/deepseek-r1:free"},
 	}
 

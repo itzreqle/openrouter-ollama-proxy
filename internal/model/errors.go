@@ -12,7 +12,7 @@ type UnknownModelError struct {
 
 func (e *UnknownModelError) Error() string {
 	return fmt.Sprintf(
-		"unknown model %q: use ollama/<name>, openrouter/<vendor>/<model>, a vendor/model OpenRouter id, or a local Ollama tag",
+		"unknown model %q: use ollama-claude/<name>, openrouter-claude/<vendor>/<model> (or legacy ollama/ / openrouter/), a vendor/model OpenRouter id, or a local Ollama tag",
 		e.Model,
 	)
 }

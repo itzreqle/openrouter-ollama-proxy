@@ -114,11 +114,25 @@ func (r *Router) Resolve(raw string) (Route, error) {
 		return Route{}, ErrEmptyModel
 	}
 
-	name := original
+	name := StripContextSuffix(original)
 
 	// Claude Code / Anthropic default model names → env aliases
 	if mapped := r.applyAlias(name); mapped != "" {
 		name = mapped
+	}
+
+	// Discovery-friendly prefixes first (contain "claude" for Claude Code /v1/models filter).
+	if rest, ok := cutPrefix(name, "ollama-claude/", "ollama-claude:"); ok {
+		if rest == "" {
+			return Route{}, ErrEmptyModel
+		}
+		return Route{Backend: BackendOllama, Upstream: rest, Original: original}, nil
+	}
+	if rest, ok := cutPrefix(name, "openrouter-claude/", "openrouter-claude:"); ok {
+		if rest == "" {
+			return Route{}, ErrEmptyModel
+		}
+		return Route{Backend: BackendOpenRouter, Upstream: rest, Original: original}, nil
 	}
 
 	if rest, ok := cutPrefix(name, "ollama/", "ollama:"); ok {
@@ -148,11 +162,25 @@ func (r *Router) Resolve(raw string) (Route, error) {
 	return Route{}, &UnknownModelError{Model: original}
 }
 
+// StripContextSuffix removes Claude Code display suffixes like [1m] / [1M].
+func StripContextSuffix(name string) string {
+	name = strings.TrimSpace(name)
+	if i := strings.LastIndex(name, "["); i >= 0 && strings.HasSuffix(name, "]") {
+		inner := name[i+1 : len(name)-1]
+		if strings.EqualFold(inner, "1m") {
+			return strings.TrimSpace(name[:i])
+		}
+	}
+	return name
+}
+
 func (r *Router) applyAlias(name string) string {
 	lower := strings.ToLower(name)
 
 	// Never rewrite explicitly routed ids.
-	if strings.HasPrefix(lower, "ollama/") || strings.HasPrefix(lower, "ollama:") ||
+	if strings.HasPrefix(lower, "ollama-claude/") || strings.HasPrefix(lower, "ollama-claude:") ||
+		strings.HasPrefix(lower, "openrouter-claude/") || strings.HasPrefix(lower, "openrouter-claude:") ||
+		strings.HasPrefix(lower, "ollama/") || strings.HasPrefix(lower, "ollama:") ||
 		strings.HasPrefix(lower, "openrouter/") || strings.HasPrefix(lower, "openrouter:") {
 		return ""
 	}
