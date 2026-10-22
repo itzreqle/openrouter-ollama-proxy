@@ -22,6 +22,12 @@ _orollama_zsh_init
 unfunction _orollama_zsh_init
 
 claude() {
+  # Re-source helpers every launch so long-lived shells don't keep a stale
+  # orollama_export_claude_env (old openrouter/ pins, missing discovery).
+  if [[ -n "${OROLLAMA_ROOT:-}" && -f "${OROLLAMA_ROOT}/scripts/lib/orollama-env.sh" ]]; then
+    # shellcheck disable=SC1091
+    source "${OROLLAMA_ROOT}/scripts/lib/orollama-env.sh"
+  fi
   if orollama_proxy_up "${OROLLAMA_PROXY_URL}"; then
     if [[ ! -f "${OROLLAMA_ENV_FILE}" ]]; then
       echo "orollama: proxy is up but missing ${OROLLAMA_ENV_FILE}" >&2
@@ -30,9 +36,7 @@ claude() {
     orollama_export_claude_env "${OROLLAMA_ENV_FILE}" "${OROLLAMA_PROXY_URL}"
     orollama_print_status "${OROLLAMA_PROXY_URL}"
   else
-    unset ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN ANTHROPIC_MODEL \
-          ANTHROPIC_DEFAULT_OPUS_MODEL ANTHROPIC_DEFAULT_SONNET_MODEL \
-          ANTHROPIC_DEFAULT_HAIKU_MODEL 2>/dev/null || true
+    orollama_clear_claude_gateway_env
     orollama_print_off
   fi
   # `command` bypasses this function and runs the real Claude Code binary.

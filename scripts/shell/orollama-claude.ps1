@@ -34,6 +34,16 @@ function Import-OrollamaResolvedEnv {
     }
 }
 
+function ConvertTo-OrollamaGatewayId {
+    param([string]$Id)
+    if (-not $Id) { return $Id }
+    if ($Id -match '\[1[mM]\]$') { $Id = $Id -replace '\[1[mM]\]$', '' }
+    if ($Id.StartsWith("openrouter-claude/") -or $Id.StartsWith("ollama-claude/")) { return $Id }
+    if ($Id.StartsWith("openrouter/")) { return "openrouter-claude/" + $Id.Substring("openrouter/".Length) }
+    if ($Id.StartsWith("ollama/")) { return "ollama-claude/" + $Id.Substring("ollama/".Length) }
+    return $Id
+}
+
 function Test-OrollamaProxy {
     param([string]$Url = "http://127.0.0.1:8082")
     try {
@@ -83,6 +93,10 @@ function claude {
             Write-Host "orollama: proxy is up but missing $($script:OrollamaEnvFile)" -ForegroundColor Red
             return
         }
+        # Drop stale pins from older openrouter/ ids.
+        Remove-Item Env:MODEL_OPUS, Env:MODEL_SONNET, Env:MODEL_HAIKU, Env:MODEL -ErrorAction SilentlyContinue
+        Remove-Item Env:ANTHROPIC_DEFAULT_OPUS_MODEL, Env:ANTHROPIC_DEFAULT_SONNET_MODEL, Env:ANTHROPIC_DEFAULT_HAIKU_MODEL, Env:ANTHROPIC_MODEL -ErrorAction SilentlyContinue
+
         Import-OrollamaResolvedEnv
 
         $token = Get-OrollamaEnvValue $script:OrollamaEnvFile "PROXY_AUTH_TOKEN"
@@ -92,6 +106,9 @@ function claude {
         if (-not $opus) { $opus = $env:OROLLAMA_MODEL_OPUS }
         if (-not $sonnet) { $sonnet = $env:OROLLAMA_MODEL_SONNET }
         if (-not $haiku) { $haiku = $env:OROLLAMA_MODEL_HAIKU }
+        $opus = ConvertTo-OrollamaGatewayId $opus
+        $sonnet = ConvertTo-OrollamaGatewayId $sonnet
+        $haiku = ConvertTo-OrollamaGatewayId $haiku
 
         $env:ANTHROPIC_BASE_URL = $script:OrollamaProxyUrl
         $env:ANTHROPIC_API_KEY = ""
@@ -99,6 +116,9 @@ function claude {
         $env:CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY = "1"
         if (-not $env:CLAUDE_CODE_GATEWAY_MODEL_DISCOVERY_TIMEOUT_MS) {
             $env:CLAUDE_CODE_GATEWAY_MODEL_DISCOVERY_TIMEOUT_MS = "15000"
+        }
+        if (-not $env:CLAUDE_CODE_MAX_CONTEXT_TOKENS) {
+            $env:CLAUDE_CODE_MAX_CONTEXT_TOKENS = "1000000"
         }
         if ($opus) { $env:ANTHROPIC_DEFAULT_OPUS_MODEL = $opus }
         if ($sonnet) {
@@ -115,6 +135,8 @@ function claude {
         Remove-Item Env:ANTHROPIC_DEFAULT_SONNET_MODEL -ErrorAction SilentlyContinue
         Remove-Item Env:ANTHROPIC_DEFAULT_HAIKU_MODEL -ErrorAction SilentlyContinue
         Remove-Item Env:CLAUDE_CODE_MAX_CONTEXT_TOKENS -ErrorAction SilentlyContinue
+        Remove-Item Env:CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY -ErrorAction SilentlyContinue
+        Remove-Item Env:CLAUDE_CODE_GATEWAY_MODEL_DISCOVERY_TIMEOUT_MS -ErrorAction SilentlyContinue
         Write-Host "orollama: " -NoNewline -ForegroundColor Cyan
         Write-Host "proxy OFF" -NoNewline -ForegroundColor Yellow
         Write-Host " — launching Claude Code without local gateway"

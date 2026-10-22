@@ -46,12 +46,37 @@ orollama_load_resolved_env() {
   set +a
 }
 
+# Rewrite legacy openrouter/ / ollama/ ids to discovery-friendly *-claude/ forms.
+# Also strip Claude Code's [1m] display suffix.
+orollama_normalize_gateway_id() {
+  local id="${1:-}"
+  [[ -z "$id" ]] && { printf ''; return 0; }
+  # strip trailing [1m] / [1M]
+  if [[ "$id" == *\[1m\] || "$id" == *\[1M\] ]]; then
+    id="${id%\[*}"
+  fi
+  case "$id" in
+    openrouter-claude/*|ollama-claude/*) printf '%s' "$id" ;;
+    openrouter/*) printf 'openrouter-claude/%s' "${id#openrouter/}" ;;
+    openrouter:*) printf 'openrouter-claude/%s' "${id#openrouter:}" ;;
+    ollama/*) printf 'ollama-claude/%s' "${id#ollama/}" ;;
+    ollama:*) printf 'ollama-claude/%s' "${id#ollama:}" ;;
+    *) printf '%s' "$id" ;;
+  esac
+}
+
 # Export Anthropic/Claude Code vars from an orollama .env file.
 # Usage: orollama_export_claude_env /path/to/.env [proxy_url]
 orollama_export_claude_env() {
   local env_file="$1"
   local proxy_url="${2:-http://127.0.0.1:8082}"
   local token opus sonnet haiku default
+
+  # Drop stale shell exports that pin the old openrouter/ ids.
+  unset MODEL_OPUS MODEL_SONNET MODEL_HAIKU MODEL 2>/dev/null || true
+  unset ANTHROPIC_DEFAULT_OPUS_MODEL ANTHROPIC_DEFAULT_SONNET_MODEL \
+        ANTHROPIC_DEFAULT_HAIKU_MODEL ANTHROPIC_MODEL \
+        ANTHROPIC_DEFAULT_FABLE_MODEL 2>/dev/null || true
 
   token="$(orollama_env_get "$env_file" PROXY_AUTH_TOKEN)"
   opus="$(orollama_env_get "$env_file" MODEL_OPUS)"
@@ -65,6 +90,11 @@ orollama_export_claude_env() {
   [[ -z "$sonnet" && -n "${OROLLAMA_MODEL_SONNET:-}" ]] && sonnet="$OROLLAMA_MODEL_SONNET"
   [[ -z "$haiku" && -n "${OROLLAMA_MODEL_HAIKU:-}" ]] && haiku="$OROLLAMA_MODEL_HAIKU"
   [[ -z "$default" && -n "${OROLLAMA_MODEL_DEFAULT:-}" ]] && default="$OROLLAMA_MODEL_DEFAULT"
+
+  opus="$(orollama_normalize_gateway_id "$opus")"
+  sonnet="$(orollama_normalize_gateway_id "$sonnet")"
+  haiku="$(orollama_normalize_gateway_id "$haiku")"
+  default="$(orollama_normalize_gateway_id "$default")"
 
   export ANTHROPIC_BASE_URL="$proxy_url"
   # Explicit empty string — required so Claude Code does not fall back to Anthropic login.
@@ -89,9 +119,23 @@ orollama_export_claude_env() {
   # Gateway discovery + context: silence 200k warning; fill /model from /v1/models.
   export CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1
   export CLAUDE_CODE_GATEWAY_MODEL_DISCOVERY_TIMEOUT_MS="${CLAUDE_CODE_GATEWAY_MODEL_DISCOVERY_TIMEOUT_MS:-15000}"
-  if [[ -n "${CLAUDE_CODE_MAX_CONTEXT_TOKENS:-}" ]]; then
+  if [[ -z "${CLAUDE_CODE_MAX_CONTEXT_TOKENS:-}" ]]; then
+    export CLAUDE_CODE_MAX_CONTEXT_TOKENS=1000000
+  else
     export CLAUDE_CODE_MAX_CONTEXT_TOKENS
   fi
+}
+
+orollama_clear_claude_gateway_env() {
+  unset ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN ANTHROPIC_MODEL \
+        ANTHROPIC_DEFAULT_OPUS_MODEL ANTHROPIC_DEFAULT_SONNET_MODEL \
+        ANTHROPIC_DEFAULT_HAIKU_MODEL ANTHROPIC_DEFAULT_FABLE_MODEL \
+        CLAUDE_CODE_MAX_CONTEXT_TOKENS \
+        CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY \
+        CLAUDE_CODE_GATEWAY_MODEL_DISCOVERY_TIMEOUT_MS \
+        OROLLAMA_MODEL_OPUS OROLLAMA_MODEL_SONNET OROLLAMA_MODEL_HAIKU \
+        OROLLAMA_MODEL_DEFAULT OROLLAMA_OPUS_AUTO OROLLAMA_SONNET_AUTO \
+        OROLLAMA_HAIKU_AUTO 2>/dev/null || true
 }
 
 orollama_color_enabled() {
@@ -122,7 +166,8 @@ orollama_print_status() {
   if [[ -n "${CLAUDE_CODE_MAX_CONTEXT_TOKENS:-}" ]]; then
     printf '  %s  %s\n' "$(orollama_paint '0;36' 'context')" "$(orollama_paint '0;37' "${CLAUDE_CODE_MAX_CONTEXT_TOKENS}")" >&2
   fi
-  printf '  %s\n' "$(orollama_paint '1;93' 'if auth warning: run  claude /logout  then relaunch')" >&2
+  printf '  %s\n' "$(orollama_paint '1;93' 'if auth warning: run  claude auth logout  then relaunch')" >&2
+  printf '  %s\n' "$(orollama_paint '0;37' 'quit Claude fully after proxy restarts — stale openrouter/ ids cause 200k warning')" >&2
 }
 
 orollama_print_off() {
