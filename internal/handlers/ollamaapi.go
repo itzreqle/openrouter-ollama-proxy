@@ -196,6 +196,7 @@ func (a *API) Chat(w http.ResponseWriter, r *http.Request) {
 		}
 		resp, err := a.Ollama.Proxy(r.Context(), http.MethodPost, "/api/chat", bytes.NewReader(rewritten), r.Header)
 		if err != nil {
+			logUpstreamTransportError(a.Log, "ollama-chat", err)
 			writeError(w, http.StatusBadGateway, err.Error())
 			return
 		}
@@ -214,12 +215,14 @@ func (a *API) Chat(w http.ResponseWriter, r *http.Request) {
 			"Accept":       []string{"text/event-stream"},
 		})
 		if err != nil {
+			logUpstreamTransportError(a.Log, "ollama-chat", err)
 			writeError(w, http.StatusBadGateway, err.Error())
 			return
 		}
 		defer resp.Body.Close()
 
 		if resp.StatusCode >= 300 {
+			maybeLogOpenRouterError(a.Log, route.Upstream, resp)
 			b, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
 			writeError(w, resp.StatusCode, string(b))
 			return

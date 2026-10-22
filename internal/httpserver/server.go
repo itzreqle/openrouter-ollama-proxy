@@ -15,6 +15,7 @@ func New(api *handlers.API, proxyAuthToken string) http.Handler {
 	mux.HandleFunc("/", api.Root)
 	mux.HandleFunc("/healthz", api.Healthz)
 	mux.HandleFunc("/orollama/catalog", api.CatalogDebug)
+	mux.HandleFunc("/orollama/limits", api.Limits)
 
 	mux.HandleFunc("/v1/messages", api.Messages)
 	mux.HandleFunc("/v1/chat/completions", api.ChatCompletions)

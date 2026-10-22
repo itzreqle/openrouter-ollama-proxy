@@ -68,11 +68,14 @@ func (a *API) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		a.Log.Error("upstream chat failed", "err", err)
+		logUpstreamTransportError(a.Log, "chat", err)
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
 	defer resp.Body.Close()
+	if route.Backend == model.BackendOpenRouter {
+		maybeLogOpenRouterError(a.Log, route.Upstream, resp)
+	}
 	streamCopy(w, resp)
 }
 
