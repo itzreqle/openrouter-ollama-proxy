@@ -13,13 +13,14 @@ import (
 	"github.com/itzreqle/openrouter-ollama-proxy/internal/config"
 	"github.com/itzreqle/openrouter-ollama-proxy/internal/handlers"
 	"github.com/itzreqle/openrouter-ollama-proxy/internal/httpserver"
+	"github.com/itzreqle/openrouter-ollama-proxy/internal/logx"
 	"github.com/itzreqle/openrouter-ollama-proxy/internal/model"
 	"github.com/itzreqle/openrouter-ollama-proxy/internal/upstream/ollama"
 	"github.com/itzreqle/openrouter-ollama-proxy/internal/upstream/openrouter"
 )
 
 func main() {
-	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	log := logx.NewLogger(os.Stdout, slog.LevelInfo)
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -43,11 +44,11 @@ func main() {
 	}
 
 	api := &handlers.API{
-		Cfg:    cfg,
-		Router: router,
-		Ollama: ollama.New(cfg.OllamaBaseURL),
+		Cfg:        cfg,
+		Router:     router,
+		Ollama:     ollama.New(cfg.OllamaBaseURL),
 		OpenRouter: openrouter.New(cfg.OpenRouterBaseURL, cfg.OpenRouterAPIKey, cfg.OpenRouterFreeOnly),
-		Log:    log,
+		Log:        log,
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -62,12 +63,16 @@ func main() {
 	}
 
 	go func() {
-		log.Info("orollama listening",
-			"addr", "http://"+cfg.Addr(),
-			"ollama", cfg.OllamaBaseURL,
-			"openrouter", cfg.OpenRouterBaseURL,
-			"auth", cfg.ProxyAuthToken != "",
+		logx.Banner(os.Stdout,
+			"http://"+cfg.Addr(),
+			cfg.OllamaBaseURL,
+			cfg.OpenRouterBaseURL,
+			cfg.ProxyAuthToken != "",
+			cfg.ModelOpus,
+			cfg.ModelSonnet,
+			cfg.ModelHaiku,
 		)
+		log.Info("ready — waiting for requests")
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Error("server failed", "err", err)
 			os.Exit(1)
