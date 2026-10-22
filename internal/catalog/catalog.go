@@ -20,7 +20,7 @@ type Entry struct {
 	Name          string `json:"name"`
 	ContextLength int    `json:"context_length"`
 	Free          bool   `json:"free"`
-	PrefixedID    string `json:"prefixed_id"` // openrouter/<id>
+	PrefixedID    string `json:"prefixed_id"` // openrouter-claude/<id> (Claude Code discovery-friendly)
 }
 
 // Resolved holds Claude role mappings after override/auto resolution.
@@ -128,7 +128,7 @@ func (c *Catalog) Refresh(ctx context.Context) error {
 			Name:          m.Name,
 			ContextLength: m.ContextLength,
 			Free:          free,
-			PrefixedID:    "openrouter/" + m.ID,
+			PrefixedID:    "openrouter-claude/" + m.ID,
 		})
 	}
 
@@ -208,8 +208,19 @@ func (c *Catalog) resolveFromOverrides(entries []Entry) Resolved {
 }
 
 func contextForPrefixed(entries []Entry, prefixed string) int {
+	prefixed = model.StripContextSuffix(prefixed)
+	bare := prefixed
+	for _, p := range []string{
+		"openrouter-claude/", "openrouter-claude:",
+		"openrouter/", "openrouter:",
+	} {
+		if strings.HasPrefix(strings.ToLower(bare), strings.ToLower(p)) {
+			bare = bare[len(p):]
+			break
+		}
+	}
 	for _, e := range entries {
-		if e.PrefixedID == prefixed || e.ID == strings.TrimPrefix(prefixed, "openrouter/") {
+		if e.PrefixedID == prefixed || e.ID == bare {
 			return e.ContextLength
 		}
 	}
@@ -255,6 +266,7 @@ func (c *Catalog) WriteResolvedEnv() error {
 	fmt.Fprintf(&b, "OROLLAMA_HAIKU_AUTO=%t\n", res.HaikuAuto)
 	fmt.Fprintf(&b, "CLAUDE_CODE_MAX_CONTEXT_TOKENS=%d\n", ctx)
 	fmt.Fprintf(&b, "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1\n")
+	fmt.Fprintf(&b, "CLAUDE_CODE_GATEWAY_MODEL_DISCOVERY_TIMEOUT_MS=15000\n")
 
 	path := filepath.Join(dir, "resolved.env")
 	tmp := path + ".tmp"

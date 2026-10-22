@@ -32,11 +32,11 @@ func (a *API) Tags(w http.ResponseWriter, r *http.Request) {
 		a.Router.TagCache.Set(namesFromLocal(local))
 		for _, m := range local {
 			prefixed := m
-			prefixed.Name = "ollama/" + m.Name
+			prefixed.Name = "ollama-claude/" + m.Name
 			if m.Model == "" {
 				prefixed.Model = prefixed.Name
 			} else {
-				prefixed.Model = "ollama/" + m.Model
+				prefixed.Model = "ollama-claude/" + m.Model
 			}
 			models = append(models, prefixed)
 		}
@@ -227,7 +227,7 @@ func (a *API) Chat(w http.ResponseWriter, r *http.Request) {
 
 		displayModel := route.Original
 		if displayModel == "" {
-			displayModel = "openrouter/" + route.Upstream
+			displayModel = "openrouter-claude/" + route.Upstream
 		}
 
 		if !stream {
