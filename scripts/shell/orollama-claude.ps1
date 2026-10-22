@@ -97,6 +97,9 @@ function claude {
         $env:ANTHROPIC_API_KEY = ""
         $env:ANTHROPIC_AUTH_TOKEN = if ($token) { $token } else { "orollama" }
         $env:CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY = "1"
+        if (-not $env:CLAUDE_CODE_GATEWAY_MODEL_DISCOVERY_TIMEOUT_MS) {
+            $env:CLAUDE_CODE_GATEWAY_MODEL_DISCOVERY_TIMEOUT_MS = "15000"
+        }
         if ($opus) { $env:ANTHROPIC_DEFAULT_OPUS_MODEL = $opus }
         if ($sonnet) {
             $env:ANTHROPIC_DEFAULT_SONNET_MODEL = $sonnet

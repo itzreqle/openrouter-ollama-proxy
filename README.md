@@ -200,8 +200,8 @@ flowchart TD
 
 | Request model | Goes to |
 | --- | --- |
-| `ollama/qwen3-coder` | Local Ollama as `qwen3-coder` |
-| `openrouter/anthropic/claude-sonnet-4` | OpenRouter as `anthropic/claude-sonnet-4` |
+| `ollama-claude/qwen3-coder` (or `ollama/…`) | Local Ollama as `qwen3-coder` |
+| `openrouter-claude/anthropic/claude-sonnet-4` (or `openrouter/…`) | OpenRouter as `anthropic/claude-sonnet-4` |
 | `deepseek/deepseek-r1:free` | OpenRouter (any `vendor/model` id) |
 | `qwen3-coder` | Ollama **if** that tag exists locally |
 | `claude-3-5-sonnet-latest` | Mapped via `MODEL_SONNET` |
@@ -319,9 +319,9 @@ claude
 /status
 ```
 
-You should see `Anthropic base URL: http://127.0.0.1:8082`. Your Sonnet pick may appear as a custom model such as `openrouter/minimax/minimax-m3.1-flash:free`.
+You should see `Anthropic base URL: http://127.0.0.1:8082`. Your Sonnet pick may appear as a custom model such as `openrouter-claude/minimax/minimax-m3.1-flash:free`.
 
-If you previously logged into Anthropic, run `/logout` once, quit, and relaunch. Dual Anthropic login + gateway token causes auth warnings.
+If you previously logged into Anthropic, run `claude auth logout` (or `/logout` in-session), quit, and relaunch. Dual Anthropic login + gateway token causes auth warnings.
 
 ### Dynamic catalog (default)
 
@@ -333,18 +333,24 @@ With `MODEL_*` left empty, the proxy fetches OpenRouter’s models sorted by **i
 | Sonnet / default | Rank #2 |
 | Haiku | Rank #3 |
 
+Ids use the `openrouter-claude/` prefix (and `ollama-claude/` for local tags). Claude Code’s gateway discovery **only keeps** `/v1/models` entries whose id contains `claude` or `anthropic`, so plain `openrouter/…` ids never appear in `/model`. Legacy `openrouter/` and `ollama/` still route.
+
 Resolved ids and context length are written to `~/.cache/orollama/resolved.env`. Shell/PowerShell hooks load that file and set:
 
 - `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1`
+- `CLAUDE_CODE_GATEWAY_MODEL_DISCOVERY_TIMEOUT_MS=15000`
 - `CLAUDE_CODE_MAX_CONTEXT_TOKENS=<context_length>`
 
-so Claude Code stops assuming a 200k window for unknown gateway model ids.
+so Claude Code fills `/model` from the gateway list and stops assuming a 200k window for unknown gateway model ids.
 
 Pin any role by setting `MODEL_OPUS` / `MODEL_SONNET` / `MODEL_HAIKU` / `MODEL` in `.env` (overrides auto). Inspect the live catalog:
 
 ```bash
+curl -s 'http://127.0.0.1:8082/v1/models?limit=1000' | jq '[.data[].id] | length'
 curl -s http://127.0.0.1:8082/orollama/catalog | jq .
 ```
+
+With `OPENROUTER_FREE_ONLY=true` (default) the list is the ranked tool-capable free set (often ~15–30), not hundreds. Set `OPENROUTER_FREE_ONLY=false` for a larger ranked catalog.
 
 **Notes:**
 - Free models are rate-limited (often 20 RPM; 50/day until you have bought ≥ $10 credits, then 1000/day). See [OpenRouter limits](https://openrouter.ai/docs/api/reference/limits).

@@ -86,8 +86,9 @@ orollama_export_claude_env() {
     export ANTHROPIC_MODEL="$default"
   fi
 
-  # Reduce "unknown model → 200k context" warning for gateway IDs.
+  # Gateway discovery + context: silence 200k warning; fill /model from /v1/models.
   export CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1
+  export CLAUDE_CODE_GATEWAY_MODEL_DISCOVERY_TIMEOUT_MS="${CLAUDE_CODE_GATEWAY_MODEL_DISCOVERY_TIMEOUT_MS:-15000}"
   if [[ -n "${CLAUDE_CODE_MAX_CONTEXT_TOKENS:-}" ]]; then
     export CLAUDE_CODE_MAX_CONTEXT_TOKENS
   fi
