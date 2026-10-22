@@ -267,12 +267,12 @@ When the proxy is **up**, the shell hook prints a colored status:
 ```text
 orollama: proxy ON  http://127.0.0.1:8082
   provider  OpenRouter + local Ollama
-  opus      openrouter/nvidia/nemotron-3-ultra-550b-a55b:free
-  sonnet    openrouter/minimax/minimax-m3.1-flash:free
-  haiku     openrouter/cohere/north-mini-code:free
+  opus      openrouter-claude/minimax/minimax-m3.1-flash:free
+  sonnet    openrouter-claude/nvidia/nemotron-3.5-super-vl:free
+  haiku     openrouter-claude/thinkingmachines/inkling-small:free
 ```
 
-Then Claude Code’s model picker shows those as Custom Opus / Sonnet / Haiku.
+Then Claude Code’s `/model` picker lists the ranked OpenRouter catalog plus local Ollama tags (via `~/.claude/settings.json` `modelPicker`).
 
 When the proxy is **down**, `claude` runs normally (no gateway) and prints `orollama: proxy OFF`.
 
@@ -297,9 +297,10 @@ PROXY_ENV="$HOME/Projects/applications/openrouter-ollama-proxy/.env"
 export ANTHROPIC_BASE_URL="http://127.0.0.1:8082"
 export ANTHROPIC_AUTH_TOKEN="$(grep '^PROXY_AUTH_TOKEN=' "$PROXY_ENV" | cut -d= -f2-)"
 export ANTHROPIC_API_KEY=""
-export ANTHROPIC_DEFAULT_OPUS_MODEL="openrouter/nvidia/nemotron-3-ultra-550b-a55b:free"
-export ANTHROPIC_DEFAULT_SONNET_MODEL="openrouter/minimax/minimax-m3.1-flash:free"
-export ANTHROPIC_DEFAULT_HAIKU_MODEL="openrouter/cohere/north-mini-code:free"
+export ANTHROPIC_DEFAULT_OPUS_MODEL="openrouter-claude/minimax/minimax-m3.1-flash:free"
+export ANTHROPIC_DEFAULT_SONNET_MODEL="openrouter-claude/nvidia/nemotron-3.5-super-vl:free"
+export ANTHROPIC_DEFAULT_HAIKU_MODEL="openrouter-claude/thinkingmachines/inkling-small:free"
+export CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1
 
 cd ~/Projects/websites/smart   # or any project
 claude
@@ -335,13 +336,13 @@ With `MODEL_*` left empty, the proxy fetches OpenRouter’s models sorted by **i
 
 Ids use the `openrouter-claude/` prefix (and `ollama-claude/` for local tags). Claude Code’s gateway discovery **only keeps** `/v1/models` entries whose id contains `claude` or `anthropic`, so plain `openrouter/…` ids never appear in `/model`. Legacy `openrouter/` and `ollama/` still route.
 
-Resolved ids and context length are written to `~/.cache/orollama/resolved.env`. Shell/PowerShell hooks load that file and set:
+Resolved ids and context length are written to `~/.cache/orollama/resolved.env`. Shell/PowerShell hooks re-load helpers on every `claude` launch (so long-lived terminals don’t keep stale `openrouter/` pins) and set:
 
 - `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1`
 - `CLAUDE_CODE_GATEWAY_MODEL_DISCOVERY_TIMEOUT_MS=15000`
 - `CLAUDE_CODE_MAX_CONTEXT_TOKENS=<context_length>`
 
-so Claude Code fills `/model` from the gateway list and stops assuming a 200k window for unknown gateway model ids.
+The proxy also merges a `modelPicker` lineup into `~/.claude/settings.json` (with `replaceBuiltInOptions`) so `/model` lists the full OpenRouter + Ollama catalog—not only the 5 Anthropic role rows. Quit Claude fully after a proxy catalog refresh so the new settings apply.
 
 Pin any role by setting `MODEL_OPUS` / `MODEL_SONNET` / `MODEL_HAIKU` / `MODEL` in `.env` (overrides auto). Inspect the live catalog:
 
@@ -350,7 +351,7 @@ curl -s 'http://127.0.0.1:8082/v1/models?limit=1000' | jq '[.data[].id] | length
 curl -s http://127.0.0.1:8082/orollama/catalog | jq .
 ```
 
-With `OPENROUTER_FREE_ONLY=true` (default) the list is the ranked tool-capable free set (often ~15–30), not hundreds. Set `OPENROUTER_FREE_ONLY=false` for a larger ranked catalog.
+With `OPENROUTER_FREE_ONLY=true` (default) `/v1/models` is the ranked free **text** catalog (chat-capable; embeddings/rerank are excluded). `OPENROUTER_TOOLS_ONLY=true` only affects which models are auto-assigned to Opus/Sonnet/Haiku — the picker still lists the full free text set. Set `OPENROUTER_FREE_ONLY=false` for paid + free.
 
 **Notes:**
 - Free models are rate-limited (often 20 RPM; 50/day until you have bought ≥ $10 credits, then 1000/day). See [OpenRouter limits](https://openrouter.ai/docs/api/reference/limits).
