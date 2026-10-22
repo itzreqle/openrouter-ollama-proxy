@@ -21,18 +21,19 @@ import (
 func testAPI(t *testing.T, ollamaURL, orURL string) *handlers.API {
 	t.Helper()
 	cache := model.NewTagCache(time.Minute)
+	// Seed so EnsureTags does not race the test upstream with a background refresh.
+	cache.Set([]string{"dummy"})
 	return &handlers.API{
 		Cfg: config.Config{
 			OllamaBaseURL:     ollamaURL,
 			OpenRouterBaseURL: orURL,
 			OpenRouterAPIKey:  "test-key",
 		},
-		Router: &model.Router{
-			Aliases: model.Aliases{
-				Sonnet: "openrouter/anthropic/claude-sonnet-4",
-			},
-			TagCache: cache,
-		},
+		Router: func() *model.Router {
+			r := &model.Router{TagCache: cache}
+			r.SetAliases(model.Aliases{Sonnet: "openrouter/anthropic/claude-sonnet-4"})
+			return r
+		}(),
 		Ollama:     ollama.New(ollamaURL),
 		OpenRouter: openrouter.New(orURL, "test-key", false),
 		Log:        slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -123,7 +124,7 @@ func TestMessagesAliasAndOllamaPath(t *testing.T) {
 	t.Cleanup(upstream.Close)
 
 	api := testAPI(t, upstream.URL, upstream.URL)
-	api.Router.Aliases.Sonnet = "ollama/qwen3-coder"
+	api.Router.SetAliases(model.Aliases{Sonnet: "ollama/qwen3-coder"})
 	api.Router.TagCache.Set([]string{"qwen3-coder"})
 
 	h := httpserver.New(api, "")

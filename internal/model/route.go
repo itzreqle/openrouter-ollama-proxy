@@ -3,6 +3,7 @@ package model
 import (
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -16,16 +17,16 @@ const (
 
 // Route is the resolved destination for a model string.
 type Route struct {
-	Backend   Backend
-	Upstream  string // model id sent to the upstream
-	Original  string
+	Backend  Backend
+	Upstream string // model id sent to the upstream
+	Original string
 }
 
 // Aliases maps Claude Code role names to configured model ids.
 type Aliases struct {
-	Opus   string
-	Sonnet string
-	Haiku  string
+	Opus    string
+	Sonnet  string
+	Haiku   string
 	Default string
 }
 
@@ -103,8 +104,22 @@ func (c *TagCache) Stale() bool {
 
 // Router resolves model strings to upstream backends.
 type Router struct {
-	Aliases  Aliases
+	aliases  atomic.Pointer[Aliases]
 	TagCache *TagCache
+}
+
+// SetAliases stores role mappings atomically (safe under concurrent Resolve).
+func (r *Router) SetAliases(a Aliases) {
+	cp := a
+	r.aliases.Store(&cp)
+}
+
+// GetAliases returns a copy of the current role mappings.
+func (r *Router) GetAliases() Aliases {
+	if p := r.aliases.Load(); p != nil {
+		return *p
+	}
+	return Aliases{}
 }
 
 // Resolve applies prefix rules, aliases, and local tag lookup.
@@ -176,38 +191,96 @@ func StripContextSuffix(name string) string {
 
 func (r *Router) applyAlias(name string) string {
 	lower := strings.ToLower(name)
+	aliases := r.GetAliases()
 
-	// Never rewrite explicitly routed ids.
-	if strings.HasPrefix(lower, "ollama-claude/") || strings.HasPrefix(lower, "ollama-claude:") ||
-		strings.HasPrefix(lower, "openrouter-claude/") || strings.HasPrefix(lower, "openrouter-claude:") ||
-		strings.HasPrefix(lower, "ollama/") || strings.HasPrefix(lower, "ollama:") ||
-		strings.HasPrefix(lower, "openrouter/") || strings.HasPrefix(lower, "openrouter:") {
+	// Never rewrite explicitly routed or vendor/model OpenRouter ids.
+	// (Anthropic-style claude-* ids may still contain '/', but those are allowlisted below.)
+	if hasRoutingPrefix(lower) {
+		return ""
+	}
+	if strings.Contains(lower, "/") && !isAnthropicStyleID(lower) {
 		return ""
 	}
 
 	switch {
-	case strings.Contains(lower, "opus"):
-		if r.Aliases.Opus != "" {
-			return r.Aliases.Opus
+	case isOpusAlias(lower):
+		return aliases.Opus
+	case isSonnetAlias(lower):
+		return aliases.Sonnet
+	case isHaikuAlias(lower):
+		return aliases.Haiku
+	case isFableAlias(lower):
+		// Fable maps to Opus slot when pinned; otherwise default.
+		if aliases.Opus != "" {
+			return aliases.Opus
 		}
-	case strings.Contains(lower, "sonnet"):
-		if r.Aliases.Sonnet != "" {
-			return r.Aliases.Sonnet
-		}
-	case strings.Contains(lower, "haiku"):
-		if r.Aliases.Haiku != "" {
-			return r.Aliases.Haiku
-		}
-	case strings.HasPrefix(lower, "claude-"):
-		if r.Aliases.Default != "" {
-			return r.Aliases.Default
-		}
-	}
-
-	if r.Aliases.Default != "" && (strings.HasPrefix(lower, "claude") || lower == "default") {
-		return r.Aliases.Default
+		return aliases.Default
+	case lower == "default" || strings.HasPrefix(lower, "claude-") || lower == "claude":
+		return aliases.Default
 	}
 	return ""
+}
+
+func hasRoutingPrefix(lower string) bool {
+	return strings.HasPrefix(lower, "ollama-claude/") || strings.HasPrefix(lower, "ollama-claude:") ||
+		strings.HasPrefix(lower, "openrouter-claude/") || strings.HasPrefix(lower, "openrouter-claude:") ||
+		strings.HasPrefix(lower, "ollama/") || strings.HasPrefix(lower, "ollama:") ||
+		strings.HasPrefix(lower, "openrouter/") || strings.HasPrefix(lower, "openrouter:")
+}
+
+func isAnthropicStyleID(lower string) bool {
+	// anthropic/claude-… or bare claude-…
+	if strings.HasPrefix(lower, "anthropic/") {
+		return true
+	}
+	return strings.HasPrefix(lower, "claude-") || lower == "claude"
+}
+
+func isOpusAlias(lower string) bool {
+	switch lower {
+	case "opus", "opusplan", "opus[1m]", "best":
+		return true
+	}
+	if strings.HasPrefix(lower, "claude-opus") || strings.HasPrefix(lower, "claude-3-opus") {
+		return true
+	}
+	return strings.HasPrefix(lower, "anthropic/claude-opus")
+}
+
+func isSonnetAlias(lower string) bool {
+	switch lower {
+	case "sonnet", "sonnet[1m]":
+		return true
+	}
+	if strings.HasPrefix(lower, "claude-sonnet") || strings.HasPrefix(lower, "claude-3-5-sonnet") ||
+		strings.HasPrefix(lower, "claude-3-7-sonnet") || strings.HasPrefix(lower, "claude-3-sonnet") {
+		return true
+	}
+	return strings.HasPrefix(lower, "anthropic/claude-sonnet") || strings.HasPrefix(lower, "anthropic/claude-3-5-sonnet") ||
+		strings.HasPrefix(lower, "anthropic/claude-3-7-sonnet")
+}
+
+func isHaikuAlias(lower string) bool {
+	switch lower {
+	case "haiku":
+		return true
+	}
+	if strings.HasPrefix(lower, "claude-haiku") || strings.HasPrefix(lower, "claude-3-5-haiku") ||
+		strings.HasPrefix(lower, "claude-3-haiku") {
+		return true
+	}
+	if strings.HasPrefix(lower, "anthropic/claude-haiku") {
+		return true
+	}
+	return strings.HasPrefix(lower, "anthropic/") && strings.Contains(lower, "haiku")
+}
+
+func isFableAlias(lower string) bool {
+	switch lower {
+	case "fable", "fable[1m]":
+		return true
+	}
+	return strings.HasPrefix(lower, "claude-fable") || strings.HasPrefix(lower, "anthropic/claude-fable")
 }
 
 func cutPrefix(s string, prefixes ...string) (string, bool) {

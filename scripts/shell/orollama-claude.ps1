@@ -24,12 +24,27 @@ function Get-OrollamaEnvValue {
     return $val.Trim('"').Trim("'")
 }
 
+function ConvertFrom-OrollamaShellQuoted {
+    param([string]$Value)
+    if (-not $Value) { return "" }
+    $v = $Value.Trim()
+    # POSIX single-quoted: 'foo'\''bar' → foo'bar
+    if ($v.Length -ge 2 -and $v.StartsWith("'") -and $v.EndsWith("'")) {
+        $inner = $v.Substring(1, $v.Length - 2)
+        return $inner.Replace("'\''", "'")
+    }
+    return $v.Trim('"')
+}
+
 function Import-OrollamaResolvedEnv {
     $path = Join-Path $HOME ".cache\orollama\resolved.env"
     if (-not (Test-Path $path)) { return }
     Get-Content $path | ForEach-Object {
         if ($_ -match '^\s*#' -or $_ -notmatch '=') { return }
-        $k, $v = $_.Split('=', 2)
+        $parts = $_.Split('=', 2)
+        if ($parts.Count -lt 2) { return }
+        $k = $parts[0]
+        $v = ConvertFrom-OrollamaShellQuoted $parts[1]
         Set-Item -Path "Env:$k" -Value $v
     }
 }

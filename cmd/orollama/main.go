@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -32,6 +34,12 @@ func main() {
 	if cfg.OpenRouterAPIKey == "" {
 		log.Warn("OPENROUTER_API_KEY is empty; OpenRouter routes will fail until it is set")
 	}
+	if !isLoopbackHost(cfg.Host) && strings.TrimSpace(cfg.ProxyAuthToken) == "" {
+		log.Warn("SECURITY: HOST is non-loopback and PROXY_AUTH_TOKEN is empty — this proxy will accept unauthenticated requests from the network",
+			"host", cfg.Host,
+			"hint", "set PROXY_AUTH_TOKEN or bind HOST=127.0.0.1",
+		)
+	}
 
 	orClient := openrouter.New(cfg.OpenRouterBaseURL, cfg.OpenRouterAPIKey, cfg.OpenRouterFreeOnly)
 	orClient.Sort = cfg.OpenRouterSort
@@ -40,15 +48,13 @@ func main() {
 	cat := catalog.New(cfg, orClient)
 
 	tagCache := model.NewTagCache(time.Duration(cfg.OllamaTagCacheSeconds) * time.Second)
-	router := &model.Router{
-		Aliases: model.Aliases{
-			Opus:    cfg.ModelOpus,
-			Sonnet:  cfg.ModelSonnet,
-			Haiku:   cfg.ModelHaiku,
-			Default: cfg.Model,
-		},
-		TagCache: tagCache,
-	}
+	router := &model.Router{TagCache: tagCache}
+	router.SetAliases(model.Aliases{
+		Opus:    cfg.ModelOpus,
+		Sonnet:  cfg.ModelSonnet,
+		Haiku:   cfg.ModelHaiku,
+		Default: cfg.Model,
+	})
 
 	api := &handlers.API{
 		Cfg:        cfg,
@@ -76,6 +82,15 @@ func main() {
 	}
 	// Seed Claude Code /model picker (OpenRouter + local Ollama).
 	api.SyncClaudePicker(refreshCtx)
+	if info, err := orClient.GetKey(refreshCtx); err != nil {
+		log.Warn("openrouter key snapshot skipped", "err", err)
+	} else if info.FreeModelDailyRequests != nil {
+		log.Info("openrouter free daily requests",
+			"remaining", info.FreeModelDailyRequests.Remaining,
+			"limit", info.FreeModelDailyRequests.Limit,
+			"used", info.FreeModelDailyRequests.Used,
+		)
+	}
 	cancel()
 
 	api.StartBackground(ctx)
@@ -114,4 +129,22 @@ func main() {
 	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancelShutdown()
 	_ = srv.Shutdown(shutdownCtx)
+}
+
+func isLoopbackHost(host string) bool {
+	h := strings.TrimSpace(host)
+	if h == "" {
+		return true
+	}
+	// Strip optional brackets for IPv6 literals.
+	h = strings.TrimPrefix(h, "[")
+	h = strings.TrimSuffix(h, "]")
+	if strings.EqualFold(h, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(h)
+	if ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
 }

@@ -167,11 +167,12 @@ Copy [`.env.example`](.env.example) to `.env`.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `HOST` / `PORT` | `127.0.0.1` / `8082` | Listen address |
+| `HOST` / `PORT` | `127.0.0.1` / `8082` | Listen address (non-loopback + empty `PROXY_AUTH_TOKEN` logs a loud warning) |
 | `OPENROUTER_API_KEY` | — | Required for OpenRouter routes |
 | `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | OpenRouter API root |
 | `OLLAMA_BASE_URL` | `http://127.0.0.1:11434` | Local Ollama |
 | `PROXY_AUTH_TOKEN` | empty | If set, clients must send `Authorization: Bearer …` or `x-api-key` |
+| `OROLLAMA_WRITE_CLAUDE_SETTINGS` | `1` | Write `modelPicker` into `~/.claude/settings.json` (set `0` to disable) |
 | `MODEL_OPUS` / `MODEL_SONNET` / `MODEL_HAIKU` / `MODEL` | empty | Claude Code role aliases; leave empty to auto-pick from ranked catalog |
 | `OPENROUTER_SORT` | `intelligence-high-to-low` | OpenRouter models list sort (website order) |
 | `OPENROUTER_FREE_ONLY` | `true` | Prefer ids containing `:free` |
@@ -284,6 +285,7 @@ Optional overrides:
 | --- | --- |
 | `OROLLAMA_ENV` | Path to `.env` (default: this repo’s `.env`) |
 | `OROLLAMA_URL` | Proxy URL (default: `http://127.0.0.1:8082`) |
+| `OROLLAMA_WRITE_CLAUDE_SETTINGS` | `1` — proxy updates `modelPicker` only; set `0` to leave `settings.json` alone |
 | `NO_COLOR` | Disable ANSI colors in proxy logs and shell status |
 | `OROLLAMA_FORCE_COLOR` | Set to `1` to force colors when stdout is not a TTY |
 
@@ -336,13 +338,14 @@ With `MODEL_*` left empty, the proxy fetches OpenRouter’s models sorted by **i
 
 Ids use the `openrouter-claude/` prefix (and `ollama-claude/` for local tags). Claude Code’s gateway discovery **only keeps** `/v1/models` entries whose id contains `claude` or `anthropic`, so plain `openrouter/…` ids never appear in `/model`. Legacy `openrouter/` and `ollama/` still route.
 
-Resolved ids and context length are written to `~/.cache/orollama/resolved.env`. Shell/PowerShell hooks re-load helpers on every `claude` launch (so long-lived terminals don’t keep stale `openrouter/` pins) and set:
+Resolved ids and context length are written to `~/.cache/orollama/resolved.env` (shell-quoted). Shell/PowerShell hooks re-load that file on every `claude` launch and own the role env vars:
 
+- `ANTHROPIC_DEFAULT_OPUS_MODEL` / `SONNET` / `HAIKU` / `ANTHROPIC_MODEL`
 - `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1`
 - `CLAUDE_CODE_GATEWAY_MODEL_DISCOVERY_TIMEOUT_MS=15000`
 - `CLAUDE_CODE_MAX_CONTEXT_TOKENS=<context_length>`
 
-The proxy also merges a `modelPicker` lineup into `~/.claude/settings.json` (with `replaceBuiltInOptions`) so `/model` lists the full OpenRouter + Ollama catalog—not only the 5 Anthropic role rows. Quit Claude fully after a proxy catalog refresh so the new settings apply.
+Separately, the proxy writes **only** `modelPicker` into `~/.claude/settings.json` (with `replaceBuiltInOptions`) so `/model` lists the full OpenRouter + Ollama catalog—not only the 5 Anthropic role rows. It does **not** mutate the settings `env` block (shell owns those). Corrupt JSON is left untouched (with a warning); a `.bak` is kept before successful overwrites. Set `OROLLAMA_WRITE_CLAUDE_SETTINGS=0` to disable. Quit Claude fully after a catalog refresh so the new picker applies.
 
 Pin any role by setting `MODEL_OPUS` / `MODEL_SONNET` / `MODEL_HAIKU` / `MODEL` in `.env` (overrides auto). Inspect the live catalog:
 
@@ -428,6 +431,7 @@ ollama run qwen3-coder
 | `GET` | `/v1/models` | Merged OpenAI model list (Ollama + ranked OpenRouter) |
 | `GET` | `/api/tags` | Merged Ollama-format catalog (same ranking) |
 | `GET` | `/orollama/catalog` | Debug: resolved roles + ranked OpenRouter entries |
+| `GET` | `/orollama/limits` | Debug: OpenRouter key credits + free daily request quota (cached ~60s; auth required when `PROXY_AUTH_TOKEN` is set) |
 | `POST` | `/api/show` | Ollama show or synthetic OpenRouter metadata |
 | `POST` | `/api/chat` | Ollama passthrough or OpenRouter translator |
 
@@ -466,8 +470,26 @@ make install   # copies bin/orollama to ~/.local/bin
 | `401 unauthorized` | Send `Authorization: Bearer $PROXY_AUTH_TOKEN` or unset `PROXY_AUTH_TOKEN` |
 | Empty OpenRouter models | Set `OPENROUTER_API_KEY`; check `curl …/healthz` |
 | Bare model name 404 | Prefix with `ollama-claude/` or `openrouter-claude/` (legacy `ollama/` / `openrouter/` also work), or pull the model in Ollama |
-| `:free` models rate-limited | Expected; switch to a paid OpenRouter model id |
 | Port conflict | Change `PORT` in `.env` (leave Ollama on 11434) |
+| Proxy rewrites my `~/.claude/settings.json` | Set `OROLLAMA_WRITE_CLAUDE_SETTINGS=0` (picker only; shell still owns `ANTHROPIC_*`) |
+| Startup warns about open proxy | Bind `HOST=127.0.0.1` or set `PROXY_AUTH_TOKEN` |
+| Corrupt `settings.json` not updated | Fix or restore `~/.claude/settings.json` / `.bak`; proxy refuses to overwrite invalid JSON |
+
+### OpenRouter status codes (`402` / `403` / `429`)
+
+orollama **passthroughs** the upstream status and logs a structured `openrouter rejected` line with `limit_source`, `remedy`, `retry_after`, and `provider_code` when present. Inspect live quota:
+
+```bash
+curl -s -H "Authorization: Bearer $PROXY_AUTH_TOKEN" http://127.0.0.1:8082/orollama/limits | jq .
+```
+
+| Status | Meaning | What to do |
+| --- | --- | --- |
+| `402` | Credits / in-flight spend budget | Check `limit_source` in the proxy log; add credits or wait for `Retry-After` ([limits docs](https://openrouter.ai/docs/api/reference/limits)) |
+| `403` | Org/key **budget** *or* provider refuse | If log has `limit_source`, wait for `resets_at` / ask org admin; otherwise try another model |
+| `429` | Free RPM/RPD (20/min; 50/day until ≥~$10 credits, then 1000/day) or provider capacity | Honor `Retry-After`; buy credits or use a paid model id |
+
+Client cancels (Claude abort/retry) log as `upstream … client canceled`, not as a mysterious OpenRouter failure.
 
 ---
 

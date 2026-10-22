@@ -178,15 +178,29 @@ func (c *Client) fetchModelsPage(ctx context.Context, q url.Values) ([]Model, in
 	return out.Data, offset + len(out.Data), nil
 }
 
-// Ping verifies the API key can list models.
+// Ping verifies the API key with a cheap GET /models?limit=1 (not a full catalog pull).
 func (c *Client) Ping(ctx context.Context) error {
 	if c.APIKey == "" {
 		return fmt.Errorf("OPENROUTER_API_KEY is not set")
 	}
 	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
-	_, err := c.ListModels(ctx)
-	return err
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+"/models?limit=1", nil)
+	if err != nil {
+		return err
+	}
+	c.setAuth(req)
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return fmt.Errorf("openrouter ping: %s: %s", resp.Status, string(b))
+	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+	return nil
 }
 
 // Proxy forwards to OpenRouter path with auth injected.

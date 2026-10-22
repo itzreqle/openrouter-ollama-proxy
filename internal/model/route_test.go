@@ -2,6 +2,7 @@ package model
 
 import (
 	"errors"
+	"sync"
 	"testing"
 	"time"
 )
@@ -59,15 +60,13 @@ func TestResolveUnknown(t *testing.T) {
 }
 
 func TestResolveAliases(t *testing.T) {
-	r := &Router{
-		Aliases: Aliases{
-			Opus:    "openrouter/anthropic/claude-opus-4",
-			Sonnet:  "ollama/qwen3-coder",
-			Haiku:   "ollama/tinyllama",
-			Default: "openrouter/anthropic/claude-sonnet-4",
-		},
-		TagCache: NewTagCache(time.Minute),
-	}
+	r := &Router{TagCache: NewTagCache(time.Minute)}
+	r.SetAliases(Aliases{
+		Opus:    "openrouter/anthropic/claude-opus-4",
+		Sonnet:  "ollama/qwen3-coder",
+		Haiku:   "ollama/tinyllama",
+		Default: "openrouter/anthropic/claude-sonnet-4",
+	})
 	r.TagCache.Set([]string{"qwen3-coder", "tinyllama"})
 
 	cases := []struct {
@@ -78,6 +77,9 @@ func TestResolveAliases(t *testing.T) {
 		{"claude-opus-4-20250514", BackendOpenRouter, "anthropic/claude-opus-4"},
 		{"claude-3-5-sonnet-latest", BackendOllama, "qwen3-coder"},
 		{"claude-3-haiku-20240307", BackendOllama, "tinyllama"},
+		{"opus", BackendOpenRouter, "anthropic/claude-opus-4"},
+		{"sonnet", BackendOllama, "qwen3-coder"},
+		{"haiku", BackendOllama, "tinyllama"},
 	}
 
 	for _, tc := range cases {
@@ -91,6 +93,19 @@ func TestResolveAliases(t *testing.T) {
 	}
 }
 
+func TestVendorModelNotHijackedByAlias(t *testing.T) {
+	r := &Router{TagCache: NewTagCache(time.Minute)}
+	r.SetAliases(Aliases{Opus: "openrouter-claude/minimax/minimax-m3.1-flash:free"})
+
+	got, err := r.Resolve("venice/opus-3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Backend != BackendOpenRouter || got.Upstream != "venice/opus-3" {
+		t.Fatalf("hijacked: got %+v", got)
+	}
+}
+
 func TestEmptyModel(t *testing.T) {
 	r := &Router{}
 	_, err := r.Resolve("  ")
@@ -100,12 +115,8 @@ func TestEmptyModel(t *testing.T) {
 }
 
 func TestExplicitPrefixSkipsAlias(t *testing.T) {
-	r := &Router{
-		Aliases: Aliases{
-			Sonnet: "ollama/other",
-		},
-		TagCache: NewTagCache(time.Minute),
-	}
+	r := &Router{TagCache: NewTagCache(time.Minute)}
+	r.SetAliases(Aliases{Sonnet: "ollama/other"})
 	got, err := r.Resolve("openrouter/anthropic/claude-sonnet-4")
 	if err != nil {
 		t.Fatal(err)
@@ -113,4 +124,23 @@ func TestExplicitPrefixSkipsAlias(t *testing.T) {
 	if got.Backend != BackendOpenRouter || got.Upstream != "anthropic/claude-sonnet-4" {
 		t.Fatalf("got %+v", got)
 	}
+}
+
+func TestAliasesConcurrentResolveAndSet(t *testing.T) {
+	r := &Router{TagCache: NewTagCache(time.Minute)}
+	r.SetAliases(Aliases{Sonnet: "openrouter/a/b"})
+
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			for j := 0; j < 200; j++ {
+				r.SetAliases(Aliases{Sonnet: "openrouter/x/y", Opus: "openrouter/o/p"})
+				_, _ = r.Resolve("sonnet")
+				_, _ = r.Resolve("venice/opus-3")
+			}
+		}(i)
+	}
+	wg.Wait()
 }

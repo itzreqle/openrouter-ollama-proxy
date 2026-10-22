@@ -109,13 +109,12 @@ func copyHopHeaders(dst, src http.Header) {
 	if src == nil {
 		return
 	}
+	// Do not forward Authorization / x-api-key — those are proxy client credentials.
 	for _, k := range []string{
 		"Content-Type",
 		"Accept",
 		"anthropic-version",
 		"anthropic-beta",
-		"x-api-key",
-		"Authorization",
 	} {
 		if v := src.Get(k); v != "" {
 			dst.Set(k, v)
