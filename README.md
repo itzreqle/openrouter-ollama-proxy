@@ -159,6 +159,29 @@ curl -s http://127.0.0.1:8082/
 # → Ollama is running
 ```
 
+### CI and releases
+
+GitHub Actions runs **build + `go test -race`** on every push/PR to `main` (see [`.github/workflows/ci.yml`](.github/workflows/ci.yml)).
+
+Tagged releases (`v*`) cross-compile `orollama` binaries and attach them to a **GitHub Release** (linux/darwin/windows — see [`.github/workflows/release.yml`](.github/workflows/release.yml)). There is no Docker / `ghcr.io` publish; this is a single Go binary.
+
+```bash
+# From a GitHub Release asset (after you push a tag, e.g. v0.2.0)
+# download orollama-darwin-arm64 (or your OS/arch), chmod +x, move to PATH
+
+# Or install from the Go module (proxy.golang.org indexes git tags — not the GitHub Packages tab)
+go install github.com/itzreqle/openrouter-ollama-proxy/cmd/orollama@latest
+# pin a version:
+go install github.com/itzreqle/openrouter-ollama-proxy/cmd/orollama@v0.2.0
+```
+
+Cut a release:
+
+```bash
+git tag v0.2.0
+git push origin v0.2.0
+```
+
 ---
 
 ## Configuration
