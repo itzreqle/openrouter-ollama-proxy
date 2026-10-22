@@ -64,11 +64,35 @@ orollama_export_claude_env() {
   fi
 }
 
+orollama_color_enabled() {
+  [[ -n "${NO_COLOR:-}" ]] && return 1
+  [[ "${OROLLAMA_FORCE_COLOR:-}" == "1" ]] && return 0
+  [[ -t 2 ]]
+}
+
+orollama_paint() {
+  local code="$1" text="$2"
+  if orollama_color_enabled; then
+    printf '\033[%sm%s\033[0m' "$code" "$text"
+  else
+    printf '%s' "$text"
+  fi
+}
+
 orollama_print_status() {
   local proxy_url="${1:-http://127.0.0.1:8082}"
-  printf 'orollama: proxy ON  %s\n' "$proxy_url" >&2
-  printf '  provider  OpenRouter + local Ollama\n' >&2
-  printf '  opus      %s\n' "${ANTHROPIC_DEFAULT_OPUS_MODEL:-unset}" >&2
-  printf '  sonnet    %s\n' "${ANTHROPIC_DEFAULT_SONNET_MODEL:-unset}" >&2
-  printf '  haiku     %s\n' "${ANTHROPIC_DEFAULT_HAIKU_MODEL:-unset}" >&2
+  printf '%s %s  %s\n' \
+    "$(orollama_paint '1;96' 'orollama:')" \
+    "$(orollama_paint '1;92' 'proxy ON')" \
+    "$(orollama_paint '0;37' "$proxy_url")" >&2
+  printf '  %s  %s\n' "$(orollama_paint '0;36' 'provider')" "$(orollama_paint '0;37' 'OpenRouter + local Ollama')" >&2
+  printf '  %s      %s\n' "$(orollama_paint '0;35' 'opus')" "$(orollama_paint '0;37' "${ANTHROPIC_DEFAULT_OPUS_MODEL:-unset}")" >&2
+  printf '  %s    %s\n' "$(orollama_paint '0;35' 'sonnet')" "$(orollama_paint '0;37' "${ANTHROPIC_DEFAULT_SONNET_MODEL:-unset}")" >&2
+  printf '  %s     %s\n' "$(orollama_paint '0;35' 'haiku')" "$(orollama_paint '0;37' "${ANTHROPIC_DEFAULT_HAIKU_MODEL:-unset}")" >&2
+}
+
+orollama_print_off() {
+  printf '%s %s — launching Claude Code without local gateway\n' \
+    "$(orollama_paint '1;96' 'orollama:')" \
+    "$(orollama_paint '1;93' 'proxy OFF')" >&2
 }

@@ -54,9 +54,10 @@ install-cli:
 			"$(HOOK_MARK)" "$(CURDIR)" "$(CURDIR)" >> "$(BASHRC)"; \
 		echo "Added bash hook to $(BASHRC)"; \
 	fi
-	@echo "Reload your shell:  source ~/.zshrc"
+	@echo "Reload your shell:  source ~/.zshrc   (or source ~/.bashrc)"
 	@echo "Then:  make run   # terminal 1"
 	@echo "       claude     # terminal 2 (auto-uses proxy when up)"
+	@echo "Windows PowerShell:  .\\scripts\\install-cli.ps1"
 
 # From this repo: make claude   (or make claude ARGS='--help')
 claude:

@@ -32,7 +32,7 @@ claude() {
     unset ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN ANTHROPIC_MODEL \
           ANTHROPIC_DEFAULT_OPUS_MODEL ANTHROPIC_DEFAULT_SONNET_MODEL \
           ANTHROPIC_DEFAULT_HAIKU_MODEL 2>/dev/null || true
-    echo "orollama: proxy OFF — launching Claude Code without local gateway" >&2
+    orollama_print_off
   fi
   command claude "$@"
 }

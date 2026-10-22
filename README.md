@@ -125,7 +125,7 @@ cp .env.example .env
 # edit .env — set OPENROUTER_API_KEY at minimum
 
 make build    # → bin/orollama
-make run      # builds then runs
+make run      # builds then runs (colorful TTY logs)
 ```
 
 Or:
@@ -133,6 +133,23 @@ Or:
 ```bash
 go run ./cmd/orollama
 ```
+
+In a real terminal you get a startup banner plus colored request lines, for example:
+
+```text
+╭────────────────────────────────────────────────────────╮
+│ orollama  OpenRouter + Ollama proxy
+├────────────────────────────────────────────────────────┤
+│ listen   http://127.0.0.1:8082
+│ ollama   http://127.0.0.1:11434
+│ openrouter  https://openrouter.ai/api/v1
+│ auth     on
+╰────────────────────────────────────────────────────────╯
+15:04:05 INFO  ready — waiting for requests
+15:04:12 POST   /v1/messages 200 842ms
+```
+
+Colors auto-disable when not attached to a TTY, or when `NO_COLOR` is set. Works in macOS Terminal, iTerm, Windows Terminal, and Linux terminals (ANSI / VT mode).
 
 Check health:
 
@@ -211,27 +228,38 @@ sequenceDiagram
 
 ### Recommended: plain `claude` (auto proxy)
 
-Install once (symlinks the helper and adds a small shell hook):
+Works on **macOS**, **Linux**, and **Windows** (PowerShell or Git Bash / WSL).
+
+#### macOS / Linux (zsh or bash)
 
 ```bash
 cd ~/Projects/applications/openrouter-ollama-proxy
 make install-cli
-source ~/.zshrc
+source ~/.zshrc    # or: source ~/.bashrc
 ```
 
-Daily workflow:
+#### Windows (PowerShell)
+
+```powershell
+cd $HOME\Projects\applications\openrouter-ollama-proxy
+.\scripts\install-cli.ps1
+. $PROFILE
+```
+
+Git Bash / WSL on Windows can use the same `make install-cli` flow as Linux.
+
+#### Daily workflow (all platforms)
 
 ```bash
 # terminal 1 — start the proxy
-cd ~/Projects/applications/openrouter-ollama-proxy
-make run
+make run          # macOS/Linux/Git Bash
+# or:  go run ./cmd/orollama
 
 # terminal 2 — any project; just run claude
-cd ~/Projects/websites/smart
 claude
 ```
 
-When the proxy is **up**, the shell hook prints something like:
+When the proxy is **up**, the shell hook prints a colored status:
 
 ```text
 orollama: proxy ON  http://127.0.0.1:8082
@@ -253,6 +281,8 @@ Optional overrides:
 | --- | --- |
 | `OROLLAMA_ENV` | Path to `.env` (default: this repo’s `.env`) |
 | `OROLLAMA_URL` | Proxy URL (default: `http://127.0.0.1:8082`) |
+| `NO_COLOR` | Disable ANSI colors in proxy logs and shell status |
+| `OROLLAMA_FORCE_COLOR` | Set to `1` to force colors when stdout is not a TTY |
 
 ### Manual exports (if you prefer)
 
