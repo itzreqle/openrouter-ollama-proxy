@@ -6,16 +6,20 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
 
 // Client talks to OpenRouter's OpenAI-compatible API.
 type Client struct {
-	BaseURL    string
-	APIKey     string
-	FreeOnly   bool
-	HTTPClient *http.Client
+	BaseURL     string
+	APIKey      string
+	FreeOnly    bool
+	Sort        string
+	ToolsOnly   bool
+	HTTPClient  *http.Client
 	HTTPReferer string
 	AppTitle    string
 }
@@ -26,6 +30,8 @@ func New(baseURL, apiKey string, freeOnly bool) *Client {
 		BaseURL:     strings.TrimRight(baseURL, "/"),
 		APIKey:      apiKey,
 		FreeOnly:    freeOnly,
+		Sort:        "intelligence-high-to-low",
+		ToolsOnly:   true,
 		HTTPReferer: "https://github.com/itzreqle/openrouter-ollama-proxy",
 		AppTitle:    "orollama",
 		HTTPClient: &http.Client{
@@ -36,48 +42,140 @@ func New(baseURL, apiKey string, freeOnly bool) *Client {
 
 // Model is a subset of OpenRouter's /models entry.
 type Model struct {
-	ID            string `json:"id"`
-	Name          string `json:"name,omitempty"`
-	ContextLength int    `json:"context_length,omitempty"`
+	ID                 string   `json:"id"`
+	Name               string   `json:"name,omitempty"`
+	ContextLength      int      `json:"context_length,omitempty"`
+	SupportedParameters []string `json:"supported_parameters,omitempty"`
+	Pricing            *Pricing `json:"pricing,omitempty"`
+}
+
+// Pricing holds OpenRouter pricing strings (USD per token).
+type Pricing struct {
+	Prompt     string `json:"prompt,omitempty"`
+	Completion string `json:"completion,omitempty"`
 }
 
 type modelsResponse struct {
 	Data []Model `json:"data"`
 }
 
-// ListModels fetches /models (OpenAI-style).
+// ListOptions controls catalog queries.
+type ListOptions struct {
+	Sort      string
+	ToolsOnly bool
+	FreeOnly  bool
+}
+
+// ListModels fetches /models with optional ranking filters.
 func (c *Client) ListModels(ctx context.Context) ([]Model, error) {
+	return c.ListModelsRanked(ctx, ListOptions{
+		Sort:      c.Sort,
+		ToolsOnly: c.ToolsOnly,
+		FreeOnly:  c.FreeOnly,
+	})
+}
+
+// ListModelsRanked fetches models using OpenRouter server-side sort/filters.
+func (c *Client) ListModelsRanked(ctx context.Context, opts ListOptions) ([]Model, error) {
 	if c.APIKey == "" {
 		return nil, fmt.Errorf("OPENROUTER_API_KEY is not set")
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+"/models", nil)
-	if err != nil {
-		return nil, err
+
+	sort := opts.Sort
+	if sort == "" {
+		sort = "intelligence-high-to-low"
 	}
-	c.setAuth(req)
-	resp, err := c.HTTPClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("openrouter list models: %w", err)
+
+	q := url.Values{}
+	q.Set("sort", sort)
+	q.Set("output_modalities", "text")
+	if opts.ToolsOnly {
+		q.Set("supported_parameters", "tools")
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 300 {
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return nil, fmt.Errorf("openrouter list models: %s: %s", resp.Status, string(b))
+
+	var all []Model
+	offset := 0
+	limit := 500
+	for {
+		q.Set("offset", strconv.Itoa(offset))
+		q.Set("limit", strconv.Itoa(limit))
+		page, nextOffset, err := c.fetchModelsPage(ctx, q)
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, page...)
+		if nextOffset < 0 || len(page) == 0 {
+			break
+		}
+		offset = nextOffset
+		if offset > 5000 {
+			break
+		}
 	}
-	var out modelsResponse
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return nil, err
+
+	if !opts.FreeOnly {
+		return all, nil
 	}
-	if !c.FreeOnly {
-		return out.Data, nil
-	}
-	filtered := make([]Model, 0, len(out.Data))
-	for _, m := range out.Data {
-		if strings.Contains(m.ID, ":free") {
+	filtered := make([]Model, 0, len(all))
+	for _, m := range all {
+		if isFreeModel(m) {
 			filtered = append(filtered, m)
 		}
 	}
 	return filtered, nil
+}
+
+func isFreeModel(m Model) bool {
+	if strings.Contains(m.ID, ":free") {
+		return true
+	}
+	if m.Pricing == nil {
+		return false
+	}
+	return isZeroPrice(m.Pricing.Prompt) && isZeroPrice(m.Pricing.Completion)
+}
+
+func isZeroPrice(s string) bool {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return false
+	}
+	f, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return s == "0"
+	}
+	return f == 0
+}
+
+func (c *Client) fetchModelsPage(ctx context.Context, q url.Values) ([]Model, int, error) {
+	u := c.BaseURL + "/models?" + q.Encode()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, -1, err
+	}
+	c.setAuth(req)
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return nil, -1, fmt.Errorf("openrouter list models: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return nil, -1, fmt.Errorf("openrouter list models: %s: %s", resp.Status, string(b))
+	}
+	var out modelsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, -1, err
+	}
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	offset, _ := strconv.Atoi(q.Get("offset"))
+	if limit <= 0 {
+		limit = 500
+	}
+	if len(out.Data) < limit {
+		return out.Data, -1, nil
+	}
+	return out.Data, offset + len(out.Data), nil
 }
 
 // Ping verifies the API key can list models.
