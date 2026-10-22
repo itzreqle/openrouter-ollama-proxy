@@ -1,0 +1,274 @@
+package catalog
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/itzreqle/openrouter-ollama-proxy/internal/config"
+	"github.com/itzreqle/openrouter-ollama-proxy/internal/model"
+	"github.com/itzreqle/openrouter-ollama-proxy/internal/upstream/openrouter"
+)
+
+// Entry is a ranked OpenRouter model ready for listing / aliases.
+type Entry struct {
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	ContextLength int    `json:"context_length"`
+	Free          bool   `json:"free"`
+	PrefixedID    string `json:"prefixed_id"` // openrouter/<id>
+}
+
+// Resolved holds Claude role mappings after override/auto resolution.
+type Resolved struct {
+	Opus      string
+	Sonnet    string
+	Haiku     string
+	Default   string
+	OpusAuto  bool
+	SonnetAuto bool
+	HaikuAuto bool
+	OpusCtx   int
+	SonnetCtx int
+	HaikuCtx  int
+}
+
+// Catalog caches ranked OpenRouter models and resolves Claude aliases.
+type Catalog struct {
+	cfg    config.Config
+	client *openrouter.Client
+
+	mu        sync.RWMutex
+	entries   []Entry
+	updatedAt time.Time
+	ttl       time.Duration
+	resolved  Resolved
+}
+
+// New builds a catalog manager.
+func New(cfg config.Config, client *openrouter.Client) *Catalog {
+	ttl := time.Duration(cfg.CatalogCacheSeconds) * time.Second
+	if ttl < 30*time.Second {
+		ttl = 10 * time.Minute
+	}
+	c := &Catalog{
+		cfg:    cfg,
+		client: client,
+		ttl:    ttl,
+	}
+	c.resolved = c.resolveFromOverrides(nil)
+	return c
+}
+
+// Stale reports whether a refresh is due.
+func (c *Catalog) Stale() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.updatedAt.IsZero() {
+		return true
+	}
+	return time.Since(c.updatedAt) > c.ttl
+}
+
+// Entries returns a copy of the ranked catalog.
+func (c *Catalog) Entries() []Entry {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	out := make([]Entry, len(c.entries))
+	copy(out, c.entries)
+	return out
+}
+
+// Resolved returns current role mappings.
+func (c *Catalog) Resolved() Resolved {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.resolved
+}
+
+// ApplyToRouter updates router aliases from the latest resolution.
+func (c *Catalog) ApplyToRouter(r *model.Router) {
+	res := c.Resolved()
+	r.Aliases = model.Aliases{
+		Opus:    res.Opus,
+		Sonnet:  res.Sonnet,
+		Haiku:   res.Haiku,
+		Default: res.Default,
+	}
+}
+
+// Refresh fetches OpenRouter models and updates aliases + resolved.env.
+func (c *Catalog) Refresh(ctx context.Context) error {
+	if c.client == nil || c.cfg.OpenRouterAPIKey == "" {
+		c.mu.Lock()
+		c.resolved = c.resolveFromOverrides(nil)
+		c.mu.Unlock()
+		_ = c.WriteResolvedEnv()
+		return fmt.Errorf("openrouter unavailable")
+	}
+
+	models, err := c.client.ListModelsRanked(ctx, openrouter.ListOptions{
+		Sort:      c.cfg.OpenRouterSort,
+		ToolsOnly: c.cfg.OpenRouterToolsOnly,
+		FreeOnly:  c.cfg.OpenRouterFreeOnly,
+	})
+	if err != nil {
+		return err
+	}
+
+	entries := make([]Entry, 0, len(models))
+	for _, m := range models {
+		free := strings.Contains(m.ID, ":free")
+		entries = append(entries, Entry{
+			ID:            m.ID,
+			Name:          m.Name,
+			ContextLength: m.ContextLength,
+			Free:          free,
+			PrefixedID:    "openrouter/" + m.ID,
+		})
+	}
+
+	resolved := c.resolveFromOverrides(entries)
+
+	c.mu.Lock()
+	c.entries = entries
+	c.resolved = resolved
+	c.updatedAt = time.Now()
+	c.mu.Unlock()
+
+	return c.WriteResolvedEnv()
+}
+
+func (c *Catalog) resolveFromOverrides(entries []Entry) Resolved {
+	pick := func(i int) (string, int) {
+		if i < 0 || i >= len(entries) {
+			return "", 0
+		}
+		return entries[i].PrefixedID, entries[i].ContextLength
+	}
+
+	auto0, ctx0 := pick(0)
+	auto1, ctx1 := pick(1)
+	auto2, ctx2 := pick(2)
+
+	res := Resolved{}
+
+	if c.cfg.ModelOpus != "" {
+		res.Opus = c.cfg.ModelOpus
+		res.OpusCtx = contextForPrefixed(entries, c.cfg.ModelOpus)
+	} else if auto0 != "" {
+		res.Opus = auto0
+		res.OpusCtx = ctx0
+		res.OpusAuto = true
+	}
+
+	if c.cfg.ModelSonnet != "" {
+		res.Sonnet = c.cfg.ModelSonnet
+		res.SonnetCtx = contextForPrefixed(entries, c.cfg.ModelSonnet)
+	} else if auto1 != "" {
+		res.Sonnet = auto1
+		res.SonnetCtx = ctx1
+		res.SonnetAuto = true
+	} else if auto0 != "" {
+		res.Sonnet = auto0
+		res.SonnetCtx = ctx0
+		res.SonnetAuto = true
+	}
+
+	if c.cfg.ModelHaiku != "" {
+		res.Haiku = c.cfg.ModelHaiku
+		res.HaikuCtx = contextForPrefixed(entries, c.cfg.ModelHaiku)
+	} else if auto2 != "" {
+		res.Haiku = auto2
+		res.HaikuCtx = ctx2
+		res.HaikuAuto = true
+	} else if auto1 != "" {
+		res.Haiku = auto1
+		res.HaikuCtx = ctx1
+		res.HaikuAuto = true
+	} else if auto0 != "" {
+		res.Haiku = auto0
+		res.HaikuCtx = ctx0
+		res.HaikuAuto = true
+	}
+
+	if c.cfg.Model != "" {
+		res.Default = c.cfg.Model
+	} else if res.Sonnet != "" {
+		res.Default = res.Sonnet
+	} else {
+		res.Default = res.Opus
+	}
+
+	return res
+}
+
+func contextForPrefixed(entries []Entry, prefixed string) int {
+	for _, e := range entries {
+		if e.PrefixedID == prefixed || e.ID == strings.TrimPrefix(prefixed, "openrouter/") {
+			return e.ContextLength
+		}
+	}
+	return 0
+}
+
+// CacheDir returns ~/.cache/orollama.
+func CacheDir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	dir := filepath.Join(home, ".cache", "orollama")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	return dir, nil
+}
+
+// WriteResolvedEnv writes ~/.cache/orollama/resolved.env for shell hooks.
+func (c *Catalog) WriteResolvedEnv() error {
+	dir, err := CacheDir()
+	if err != nil {
+		return err
+	}
+	res := c.Resolved()
+	ctx := res.SonnetCtx
+	if ctx <= 0 {
+		ctx = res.OpusCtx
+	}
+	if ctx <= 0 {
+		ctx = 200000
+	}
+
+	var b strings.Builder
+	b.WriteString("# generated by orollama — do not edit\n")
+	fmt.Fprintf(&b, "OROLLAMA_MODEL_OPUS=%s\n", res.Opus)
+	fmt.Fprintf(&b, "OROLLAMA_MODEL_SONNET=%s\n", res.Sonnet)
+	fmt.Fprintf(&b, "OROLLAMA_MODEL_HAIKU=%s\n", res.Haiku)
+	fmt.Fprintf(&b, "OROLLAMA_MODEL_DEFAULT=%s\n", res.Default)
+	fmt.Fprintf(&b, "OROLLAMA_OPUS_AUTO=%t\n", res.OpusAuto)
+	fmt.Fprintf(&b, "OROLLAMA_SONNET_AUTO=%t\n", res.SonnetAuto)
+	fmt.Fprintf(&b, "OROLLAMA_HAIKU_AUTO=%t\n", res.HaikuAuto)
+	fmt.Fprintf(&b, "CLAUDE_CODE_MAX_CONTEXT_TOKENS=%d\n", ctx)
+	fmt.Fprintf(&b, "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1\n")
+
+	path := filepath.Join(dir, "resolved.env")
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, []byte(b.String()), 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+// ResolvedEnvPath is the path shell hooks should source.
+func ResolvedEnvPath() string {
+	dir, err := CacheDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(dir, "resolved.env")
+}

@@ -14,12 +14,15 @@ type Config struct {
 	Host string
 	Port int
 
-	OpenRouterAPIKey  string
-	OpenRouterBaseURL string
+	OpenRouterAPIKey   string
+	OpenRouterBaseURL  string
 	OpenRouterFreeOnly bool
+	OpenRouterSort     string
+	OpenRouterToolsOnly bool
 
-	OllamaBaseURL          string
-	OllamaTagCacheSeconds  int
+	OllamaBaseURL         string
+	OllamaTagCacheSeconds int
+	CatalogCacheSeconds   int
 
 	ProxyAuthToken string
 
@@ -36,21 +39,25 @@ func (c Config) Addr() string {
 
 // Load reads optional .env then environment variables.
 func Load() (Config, error) {
-	_ = godotenv.Load() // ignore missing .env
+	// Overload so empty MODEL_* in .env clears stale shell exports (auto-catalog).
+	_ = godotenv.Overload() // ignore missing .env
 
 	cfg := Config{
-		Host:                   envOr("HOST", "127.0.0.1"),
-		Port:                   envInt("PORT", 8082),
-		OpenRouterAPIKey:       os.Getenv("OPENROUTER_API_KEY"),
-		OpenRouterBaseURL:      strings.TrimRight(envOr("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"), "/"),
-		OpenRouterFreeOnly:     envBool("OPENROUTER_FREE_ONLY", false),
-		OllamaBaseURL:          strings.TrimRight(envOr("OLLAMA_BASE_URL", "http://127.0.0.1:11434"), "/"),
-		OllamaTagCacheSeconds:  envInt("OLLAMA_TAG_CACHE_SECONDS", 30),
-		ProxyAuthToken:         os.Getenv("PROXY_AUTH_TOKEN"),
-		ModelOpus:              os.Getenv("MODEL_OPUS"),
-		ModelSonnet:            os.Getenv("MODEL_SONNET"),
-		ModelHaiku:             os.Getenv("MODEL_HAIKU"),
-		Model:                  os.Getenv("MODEL"),
+		Host:                envOr("HOST", "127.0.0.1"),
+		Port:                envInt("PORT", 8082),
+		OpenRouterAPIKey:    os.Getenv("OPENROUTER_API_KEY"),
+		OpenRouterBaseURL:   strings.TrimRight(envOr("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"), "/"),
+		OpenRouterFreeOnly:  envBool("OPENROUTER_FREE_ONLY", true),
+		OpenRouterSort:      envOr("OPENROUTER_SORT", "intelligence-high-to-low"),
+		OpenRouterToolsOnly: envBool("OPENROUTER_TOOLS_ONLY", true),
+		OllamaBaseURL:       strings.TrimRight(envOr("OLLAMA_BASE_URL", "http://127.0.0.1:11434"), "/"),
+		OllamaTagCacheSeconds: envInt("OLLAMA_TAG_CACHE_SECONDS", 30),
+		CatalogCacheSeconds:   envInt("CATALOG_CACHE_SECONDS", 600),
+		ProxyAuthToken:        os.Getenv("PROXY_AUTH_TOKEN"),
+		ModelOpus:             strings.TrimSpace(os.Getenv("MODEL_OPUS")),
+		ModelSonnet:           strings.TrimSpace(os.Getenv("MODEL_SONNET")),
+		ModelHaiku:            strings.TrimSpace(os.Getenv("MODEL_HAIKU")),
+		Model:                 strings.TrimSpace(os.Getenv("MODEL")),
 	}
 
 	if cfg.Port <= 0 || cfg.Port > 65535 {
@@ -58,6 +65,9 @@ func Load() (Config, error) {
 	}
 	if cfg.OllamaTagCacheSeconds < 1 {
 		cfg.OllamaTagCacheSeconds = 30
+	}
+	if cfg.CatalogCacheSeconds < 30 {
+		cfg.CatalogCacheSeconds = 600
 	}
 
 	return cfg, nil
