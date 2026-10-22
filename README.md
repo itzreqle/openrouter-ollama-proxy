@@ -44,7 +44,7 @@ flowchart LR
 
 ```mermaid
 flowchart TB
-  subgraph mac [Your_Mac]
+  subgraph device [your_device]
     CC[Claude_Code]
     Apps[Ollama_compatible_apps]
     Proxy["orollama :8082"]
