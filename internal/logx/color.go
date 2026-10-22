@@ -228,8 +228,24 @@ func (h *Handler) writeRequest(b *strings.Builder, ts string, attrs []slog.Attr)
 	b.WriteByte('\n')
 }
 
+// RoleLine is a banner model row.
+type RoleLine struct {
+	ID   string
+	Auto bool
+}
+
+func formatRole(id string, auto bool) string {
+	if id == "" {
+		return "(unset)"
+	}
+	if auto {
+		return id + " (auto)"
+	}
+	return id
+}
+
 // Banner prints a colorful startup banner.
-func Banner(w io.Writer, addr, ollamaURL, openRouterURL string, auth bool, opus, sonnet, haiku string) {
+func Banner(w io.Writer, addr, ollamaURL, openRouterURL string, auth bool, opus, sonnet, haiku RoleLine) {
 	color := Enabled(w)
 	paint := func(code, s string) string {
 		if !color {
@@ -254,17 +270,9 @@ func Banner(w io.Writer, addr, ollamaURL, openRouterURL string, auth bool, opus,
 		authLabel = paint(hiGreen, "on")
 	}
 	fmt.Fprintf(w, "%s %s     %s\n", paint(hiCyan+bold, "│"), paint(cyan, "auth"), authLabel)
-	if opus != "" || sonnet != "" || haiku != "" {
-		fmt.Fprintln(w, paint(hiCyan+bold, "├"+line+"┤"))
-		if opus != "" {
-			fmt.Fprintf(w, "%s %s     %s\n", paint(hiCyan+bold, "│"), paint(magenta, "opus"), paint(white, opus))
-		}
-		if sonnet != "" {
-			fmt.Fprintf(w, "%s %s   %s\n", paint(hiCyan+bold, "│"), paint(magenta, "sonnet"), paint(white, sonnet))
-		}
-		if haiku != "" {
-			fmt.Fprintf(w, "%s %s    %s\n", paint(hiCyan+bold, "│"), paint(magenta, "haiku"), paint(white, haiku))
-		}
-	}
+	fmt.Fprintln(w, paint(hiCyan+bold, "├"+line+"┤"))
+	fmt.Fprintf(w, "%s %s     %s\n", paint(hiCyan+bold, "│"), paint(magenta, "opus"), paint(white, formatRole(opus.ID, opus.Auto)))
+	fmt.Fprintf(w, "%s %s   %s\n", paint(hiCyan+bold, "│"), paint(magenta, "sonnet"), paint(white, formatRole(sonnet.ID, sonnet.Auto)))
+	fmt.Fprintf(w, "%s %s    %s\n", paint(hiCyan+bold, "│"), paint(magenta, "haiku"), paint(white, formatRole(haiku.ID, haiku.Auto)))
 	fmt.Fprintln(w, paint(hiCyan+bold, "╰"+line+"╯"))
 }

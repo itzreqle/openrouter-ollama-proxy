@@ -21,8 +21,10 @@ func (a *API) Tags(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
+
+	a.EnsureCatalog(ctx)
 
 	models := make([]ollama.Model, 0, 64)
 
@@ -42,27 +44,24 @@ func (a *API) Tags(w http.ResponseWriter, r *http.Request) {
 		a.Log.Warn("ollama /api/tags failed", "err", err)
 	}
 
-	if a.Cfg.OpenRouterAPIKey != "" {
-		if remote, err := a.OpenRouter.ListModels(ctx); err == nil {
-			now := time.Now().UTC().Format(time.RFC3339)
-			for _, m := range remote {
-				models = append(models, ollama.Model{
-					Name:       "openrouter/" + m.ID,
-					Model:      "openrouter/" + m.ID,
-					ModifiedAt: now,
-					Size:       0,
-					Digest:     "openrouter",
-					Details: map[string]any{
-						"family":            "openrouter",
-						"parameter_size":    "",
-						"quantization_level": "",
-						"context_length":    m.ContextLength,
-						"display_name":      m.Name,
-					},
-				})
-			}
-		} else {
-			a.Log.Warn("openrouter models for tags failed", "err", err)
+	if a.Catalog != nil {
+		now := time.Now().UTC().Format(time.RFC3339)
+		for _, m := range a.Catalog.Entries() {
+			models = append(models, ollama.Model{
+				Name:       m.PrefixedID,
+				Model:      m.PrefixedID,
+				ModifiedAt: now,
+				Size:       0,
+				Digest:     "openrouter",
+				Details: map[string]any{
+					"family":             "openrouter",
+					"parameter_size":     "",
+					"quantization_level": "",
+					"context_length":     m.ContextLength,
+					"display_name":       m.Name,
+					"free":               m.Free,
+				},
+			})
 		}
 	}
 
@@ -85,6 +84,7 @@ func (a *API) Show(w http.ResponseWriter, r *http.Request) {
 	}
 
 	a.EnsureTags(r.Context())
+	a.EnsureCatalog(r.Context())
 
 	body, err := readBody(r)
 	if err != nil {
@@ -156,6 +156,7 @@ func (a *API) Chat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	a.EnsureTags(r.Context())
+	a.EnsureCatalog(r.Context())
 
 	body, err := readBody(r)
 	if err != nil {

@@ -19,6 +19,7 @@ func (a *API) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	a.EnsureTags(r.Context())
+	a.EnsureCatalog(r.Context())
 
 	body, err := readBody(r)
 	if err != nil {
@@ -74,17 +75,18 @@ func (a *API) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 	streamCopy(w, resp)
 }
 
-// ListModels handles GET /v1/models (merged OpenAI format).
+// ListModels handles GET /v1/models (merged OpenAI format, ranked OpenRouter).
 func (a *API) ListModels(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 
 	a.EnsureTags(ctx)
+	a.EnsureCatalog(ctx)
 
 	type item struct {
 		ID      string `json:"id"`
@@ -109,18 +111,14 @@ func (a *API) ListModels(w http.ResponseWriter, r *http.Request) {
 		a.Log.Warn("list ollama models failed", "err", err)
 	}
 
-	if a.Cfg.OpenRouterAPIKey != "" {
-		if models, err := a.OpenRouter.ListModels(ctx); err == nil {
-			for _, m := range models {
-				data = append(data, item{
-					ID:      "openrouter/" + m.ID,
-					Object:  "model",
-					Created: now,
-					OwnedBy: "openrouter",
-				})
-			}
-		} else {
-			a.Log.Warn("list openrouter models failed", "err", err)
+	if a.Catalog != nil {
+		for _, m := range a.Catalog.Entries() {
+			data = append(data, item{
+				ID:      m.PrefixedID,
+				Object:  "model",
+				Created: now,
+				OwnedBy: "openrouter",
+			})
 		}
 	}
 

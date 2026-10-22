@@ -17,6 +17,7 @@ func (a *API) Messages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	a.EnsureTags(r.Context())
+	a.EnsureCatalog(r.Context())
 
 	body, err := readBody(r)
 	if err != nil {

@@ -14,6 +14,7 @@ func New(api *handlers.API, proxyAuthToken string) http.Handler {
 
 	mux.HandleFunc("/", api.Root)
 	mux.HandleFunc("/healthz", api.Healthz)
+	mux.HandleFunc("/orollama/catalog", api.CatalogDebug)
 
 	mux.HandleFunc("/v1/messages", api.Messages)
 	mux.HandleFunc("/v1/chat/completions", api.ChatCompletions)
@@ -34,7 +35,7 @@ func New(api *handlers.API, proxyAuthToken string) http.Handler {
 func withAuth(token string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// health endpoints stay open for local probes
-		if r.URL.Path == "/" || r.URL.Path == "/healthz" {
+		if r.URL.Path == "/" || r.URL.Path == "/healthz" || r.URL.Path == "/orollama/catalog" {
 			next.ServeHTTP(w, r)
 			return
 		}

@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/itzreqle/openrouter-ollama-proxy/internal/catalog"
 	"github.com/itzreqle/openrouter-ollama-proxy/internal/config"
 	"github.com/itzreqle/openrouter-ollama-proxy/internal/model"
 	"github.com/itzreqle/openrouter-ollama-proxy/internal/upstream/ollama"
@@ -22,6 +23,7 @@ type API struct {
 	Router     *model.Router
 	Ollama     *ollama.Client
 	OpenRouter *openrouter.Client
+	Catalog    *catalog.Catalog
 	Log        *slog.Logger
 
 	refreshMu sync.Mutex
@@ -43,6 +45,29 @@ func (a *API) EnsureTags(ctx context.Context) {
 		return
 	}
 	a.Router.TagCache.Set(names)
+}
+
+// EnsureCatalog refreshes the OpenRouter ranked catalog when stale.
+func (a *API) EnsureCatalog(ctx context.Context) {
+	if a.Catalog == nil || !a.Catalog.Stale() {
+		return
+	}
+	a.refreshMu.Lock()
+	defer a.refreshMu.Unlock()
+	if !a.Catalog.Stale() {
+		return
+	}
+	if err := a.Catalog.Refresh(ctx); err != nil {
+		a.Log.Warn("openrouter catalog refresh failed", "err", err)
+		return
+	}
+	a.Catalog.ApplyToRouter(a.Router)
+	a.Log.Info("catalog refreshed",
+		"models", len(a.Catalog.Entries()),
+		"opus", a.Catalog.Resolved().Opus,
+		"sonnet", a.Catalog.Resolved().Sonnet,
+		"haiku", a.Catalog.Resolved().Haiku,
+	)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -78,7 +103,6 @@ func extractModel(body []byte) (string, map[string]any, error) {
 
 func streamCopy(dst http.ResponseWriter, src *http.Response) {
 	for k, vv := range src.Header {
-		// skip hop-by-hop
 		switch http.CanonicalHeaderKey(k) {
 		case "Connection", "Keep-Alive", "Proxy-Authenticate", "Proxy-Authorization",
 			"Te", "Trailers", "Transfer-Encoding", "Upgrade":
@@ -122,7 +146,28 @@ func (a *API) startTagRefresher(ctx context.Context) {
 	}()
 }
 
-// StartBackground starts periodic Ollama tag refresh.
+func (a *API) startCatalogRefresher(ctx context.Context) {
+	if a.Catalog == nil {
+		return
+	}
+	ttl := time.Duration(a.Cfg.CatalogCacheSeconds) * time.Second
+	ticker := time.NewTicker(ttl)
+	go func() {
+		defer ticker.Stop()
+		a.EnsureCatalog(ctx)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				a.EnsureCatalog(context.Background())
+			}
+		}
+	}()
+}
+
+// StartBackground starts periodic Ollama tag + OpenRouter catalog refresh.
 func (a *API) StartBackground(ctx context.Context) {
 	a.startTagRefresher(ctx)
+	a.startCatalogRefresher(ctx)
 }
