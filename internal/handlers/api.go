@@ -62,12 +62,37 @@ func (a *API) EnsureCatalog(ctx context.Context) {
 		return
 	}
 	a.Catalog.ApplyToRouter(a.Router)
+	a.SyncClaudePicker(ctx)
 	a.Log.Info("catalog refreshed",
 		"models", len(a.Catalog.Entries()),
 		"opus", a.Catalog.Resolved().Opus,
 		"sonnet", a.Catalog.Resolved().Sonnet,
 		"haiku", a.Catalog.Resolved().Haiku,
 	)
+}
+
+// SyncClaudePicker writes ~/.claude/settings.json modelPicker from the live catalog.
+func (a *API) SyncClaudePicker(ctx context.Context) {
+	if a.Catalog == nil {
+		return
+	}
+	extra := make([]catalog.PickerOption, 0, 8)
+	if local, err := a.Ollama.ListModels(ctx); err == nil {
+		for _, m := range local {
+			name := m.Name
+			if name == "" {
+				continue
+			}
+			extra = append(extra, catalog.PickerOption{
+				Model:       "ollama-claude/" + name,
+				Label:       name,
+				Description: "Local Ollama model via orollama",
+			})
+		}
+	}
+	if err := a.Catalog.WriteClaudeSettings(extra); err != nil {
+		a.Log.Warn("claude settings picker write failed", "err", err)
+	}
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

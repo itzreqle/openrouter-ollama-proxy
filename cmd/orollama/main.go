@@ -59,8 +59,8 @@ func main() {
 		Log:        log,
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
+	ctx, cancelBg := context.WithCancel(context.Background())
+	defer cancelBg()
 
 	// Blocking first catalog refresh so banner shows real auto-picked models.
 	refreshCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
@@ -74,6 +74,8 @@ func main() {
 			"free_only", cfg.OpenRouterFreeOnly,
 		)
 	}
+	// Seed Claude Code /model picker (OpenRouter + local Ollama).
+	api.SyncClaudePicker(refreshCtx)
 	cancel()
 
 	api.StartBackground(ctx)
@@ -104,8 +106,11 @@ func main() {
 		}
 	}()
 
-	<-ctx.Done()
-	log.Info("shutting down")
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	sig := <-sigCh
+	log.Info("shutting down", "signal", sig.String())
+	cancelBg()
 	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancelShutdown()
 	_ = srv.Shutdown(shutdownCtx)

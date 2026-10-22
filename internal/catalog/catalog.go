@@ -2,9 +2,11 @@ package catalog
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -21,6 +23,7 @@ type Entry struct {
 	ContextLength int    `json:"context_length"`
 	Free          bool   `json:"free"`
 	PrefixedID    string `json:"prefixed_id"` // openrouter-claude/<id> (Claude Code discovery-friendly)
+	SupportsTools bool   `json:"supports_tools,omitempty"`
 }
 
 // Resolved holds Claude role mappings after override/auto resolution.
@@ -111,9 +114,11 @@ func (c *Catalog) Refresh(ctx context.Context) error {
 		return fmt.Errorf("openrouter unavailable")
 	}
 
+	// Full free/text catalog for /v1/models (Claude Code /model picker).
+	// ToolsOnly is applied only when auto-picking Opus/Sonnet/Haiku roles.
 	models, err := c.client.ListModelsRanked(ctx, openrouter.ListOptions{
 		Sort:      c.cfg.OpenRouterSort,
-		ToolsOnly: c.cfg.OpenRouterToolsOnly,
+		ToolsOnly: false,
 		FreeOnly:  c.cfg.OpenRouterFreeOnly,
 	})
 	if err != nil {
@@ -122,17 +127,24 @@ func (c *Catalog) Refresh(ctx context.Context) error {
 
 	entries := make([]Entry, 0, len(models))
 	for _, m := range models {
-		free := strings.Contains(m.ID, ":free")
+		free := strings.Contains(m.ID, ":free") || isZeroPriced(m)
 		entries = append(entries, Entry{
 			ID:            m.ID,
 			Name:          m.Name,
 			ContextLength: m.ContextLength,
 			Free:          free,
 			PrefixedID:    "openrouter-claude/" + m.ID,
+			SupportsTools: supportsTools(m),
 		})
 	}
 
-	resolved := c.resolveFromOverrides(entries)
+	pickFrom := entries
+	if c.cfg.OpenRouterToolsOnly {
+		if tools := filterTools(entries); len(tools) > 0 {
+			pickFrom = tools
+		}
+	}
+	resolved := c.resolveFromOverrides(pickFrom)
 
 	c.mu.Lock()
 	c.entries = entries
@@ -140,7 +152,13 @@ func (c *Catalog) Refresh(ctx context.Context) error {
 	c.updatedAt = time.Now()
 	c.mu.Unlock()
 
-	return c.WriteResolvedEnv()
+	if err := c.WriteResolvedEnv(); err != nil {
+		return err
+	}
+	// Claude Code's /model UI often keeps only the 5 role rows even when
+	// gateway discovery succeeds; modelPicker forces the full catalog in.
+	_ = c.WriteClaudeSettings(nil)
+	return nil
 }
 
 func (c *Catalog) resolveFromOverrides(entries []Entry) Resolved {
@@ -207,6 +225,44 @@ func (c *Catalog) resolveFromOverrides(entries []Entry) Resolved {
 	return res
 }
 
+func supportsTools(m openrouter.Model) bool {
+	for _, p := range m.SupportedParameters {
+		if strings.EqualFold(p, "tools") {
+			return true
+		}
+	}
+	return false
+}
+
+func isZeroPriced(m openrouter.Model) bool {
+	if m.Pricing == nil {
+		return false
+	}
+	return zeroPrice(m.Pricing.Prompt) && zeroPrice(m.Pricing.Completion)
+}
+
+func zeroPrice(s string) bool {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return false
+	}
+	f, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return s == "0"
+	}
+	return f == 0
+}
+
+func filterTools(entries []Entry) []Entry {
+	out := make([]Entry, 0, len(entries))
+	for _, e := range entries {
+		if e.SupportsTools {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
 func contextForPrefixed(entries []Entry, prefixed string) int {
 	prefixed = model.StripContextSuffix(prefixed)
 	bare := prefixed
@@ -240,6 +296,13 @@ func CacheDir() (string, error) {
 	return dir, nil
 }
 
+// PickerOption is one Claude Code modelPicker row.
+type PickerOption struct {
+	Model       string `json:"model"`
+	Label       string `json:"label,omitempty"`
+	Description string `json:"description,omitempty"`
+}
+
 // WriteResolvedEnv writes ~/.cache/orollama/resolved.env for shell hooks.
 func (c *Catalog) WriteResolvedEnv() error {
 	dir, err := CacheDir()
@@ -264,6 +327,18 @@ func (c *Catalog) WriteResolvedEnv() error {
 	fmt.Fprintf(&b, "OROLLAMA_OPUS_AUTO=%t\n", res.OpusAuto)
 	fmt.Fprintf(&b, "OROLLAMA_SONNET_AUTO=%t\n", res.SonnetAuto)
 	fmt.Fprintf(&b, "OROLLAMA_HAIKU_AUTO=%t\n", res.HaikuAuto)
+	// Also emit ANTHROPIC_* so long-lived shells that only source this file
+	// still get discovery-friendly ids (not stale openrouter/ pins).
+	if res.Opus != "" {
+		fmt.Fprintf(&b, "ANTHROPIC_DEFAULT_OPUS_MODEL=%s\n", res.Opus)
+	}
+	if res.Sonnet != "" {
+		fmt.Fprintf(&b, "ANTHROPIC_DEFAULT_SONNET_MODEL=%s\n", res.Sonnet)
+		fmt.Fprintf(&b, "ANTHROPIC_MODEL=%s\n", res.Sonnet)
+	}
+	if res.Haiku != "" {
+		fmt.Fprintf(&b, "ANTHROPIC_DEFAULT_HAIKU_MODEL=%s\n", res.Haiku)
+	}
 	fmt.Fprintf(&b, "CLAUDE_CODE_MAX_CONTEXT_TOKENS=%d\n", ctx)
 	fmt.Fprintf(&b, "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1\n")
 	fmt.Fprintf(&b, "CLAUDE_CODE_GATEWAY_MODEL_DISCOVERY_TIMEOUT_MS=15000\n")
@@ -271,6 +346,126 @@ func (c *Catalog) WriteResolvedEnv() error {
 	path := filepath.Join(dir, "resolved.env")
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, []byte(b.String()), 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+// WriteClaudeSettings merges gateway modelPicker + env into ~/.claude/settings.json.
+// extra is typically local ollama-claude/* rows.
+func (c *Catalog) WriteClaudeSettings(extra []PickerOption) error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(home, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+
+	settings := map[string]any{}
+	if raw, err := os.ReadFile(path); err == nil && len(raw) > 0 {
+		if err := json.Unmarshal(raw, &settings); err != nil {
+			settings = map[string]any{}
+		}
+	}
+
+	opts := make([]PickerOption, 0, len(extra)+len(c.Entries())+3)
+	seen := map[string]struct{}{}
+	add := func(o PickerOption) {
+		o.Model = strings.TrimSpace(o.Model)
+		if o.Model == "" {
+			return
+		}
+		if _, ok := seen[o.Model]; ok {
+			return
+		}
+		seen[o.Model] = struct{}{}
+		opts = append(opts, o)
+	}
+
+	res := c.Resolved()
+	roleOf := map[string]string{}
+	if res.Opus != "" {
+		roleOf[res.Opus] = "Opus"
+	}
+	if res.Sonnet != "" {
+		roleOf[res.Sonnet] = "Sonnet"
+	}
+	if res.Haiku != "" {
+		roleOf[res.Haiku] = "Haiku"
+	}
+
+	// OpenRouter first, same order as ListModelsRanked (intelligence-high-to-low).
+	for _, e := range c.Entries() {
+		label := e.Name
+		if label == "" {
+			label = e.ID
+		}
+		desc := "OpenRouter via orollama"
+		if e.Free {
+			desc = "OpenRouter :free via orollama"
+		}
+		if e.ContextLength > 0 {
+			desc = fmt.Sprintf("%s · %dk context", desc, e.ContextLength/1000)
+		}
+		if role, ok := roleOf[e.PrefixedID]; ok {
+			desc = fmt.Sprintf("%s · auto %s", desc, role)
+		}
+		add(PickerOption{Model: e.PrefixedID, Label: label, Description: desc})
+	}
+	// Local Ollama after the ranked remote catalog.
+	for _, e := range extra {
+		add(e)
+	}
+
+	settings["modelPicker"] = map[string]any{
+		// Keep Default row; replace Anthropic Fable/family chrome with our catalog.
+		"replaceBuiltInOptions": true,
+		"options":               opts,
+	}
+
+	env, _ := settings["env"].(map[string]any)
+	if env == nil {
+		env = map[string]any{}
+	}
+	env["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"] = "1"
+	env["CLAUDE_CODE_GATEWAY_MODEL_DISCOVERY_TIMEOUT_MS"] = "15000"
+	if res.Opus != "" {
+		env["ANTHROPIC_DEFAULT_OPUS_MODEL"] = res.Opus
+	}
+	if res.Sonnet != "" {
+		env["ANTHROPIC_DEFAULT_SONNET_MODEL"] = res.Sonnet
+		env["ANTHROPIC_MODEL"] = res.Sonnet
+	}
+	if res.Haiku != "" {
+		env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = res.Haiku
+	}
+	ctxTok := res.SonnetCtx
+	if ctxTok <= 0 {
+		ctxTok = res.OpusCtx
+	}
+	if ctxTok <= 0 {
+		ctxTok = 1000000
+	}
+	env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] = strconv.Itoa(ctxTok)
+	settings["env"] = env
+
+	// Drop a stale "haiku"/"opus" alias default so Claude doesn't ignore gateway pins.
+	if m, ok := settings["model"].(string); ok {
+		switch strings.ToLower(strings.TrimSpace(m)) {
+		case "haiku", "opus", "sonnet", "fable", "best", "default":
+			delete(settings, "model")
+		}
+	}
+
+	out, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		return err
+	}
+	out = append(out, '\n')
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, out, 0o644); err != nil {
 		return err
 	}
 	return os.Rename(tmp, path)
