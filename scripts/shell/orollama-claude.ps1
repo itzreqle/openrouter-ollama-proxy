@@ -1,8 +1,6 @@
 # orollama: plain `claude` uses the local proxy when it is running (Windows PowerShell / pwsh).
 # Install once from the repo:
 #   .\scripts\install-cli.ps1
-# Or add to your PowerShell profile:
-#   . "C:\path\to\openrouter-ollama-proxy\scripts\shell\orollama-claude.ps1"
 
 $ErrorActionPreference = "Stop"
 
@@ -24,6 +22,16 @@ function Get-OrollamaEnvValue {
     if (-not $line) { return "" }
     $val = $line.Substring($Key.Length + 1).Trim()
     return $val.Trim('"').Trim("'")
+}
+
+function Import-OrollamaResolvedEnv {
+    $path = Join-Path $HOME ".cache\orollama\resolved.env"
+    if (-not (Test-Path $path)) { return }
+    Get-Content $path | ForEach-Object {
+        if ($_ -match '^\s*#' -or $_ -notmatch '=') { return }
+        $k, $v = $_.Split('=', 2)
+        Set-Item -Path "Env:$k" -Value $v
+    }
 }
 
 function Test-OrollamaProxy {
@@ -49,6 +57,11 @@ function Write-OrollamaStatus {
     Write-Host $env:ANTHROPIC_DEFAULT_SONNET_MODEL
     Write-Host "  haiku     " -NoNewline -ForegroundColor Magenta
     Write-Host $env:ANTHROPIC_DEFAULT_HAIKU_MODEL
+    if ($env:CLAUDE_CODE_MAX_CONTEXT_TOKENS) {
+        Write-Host "  context   " -NoNewline -ForegroundColor DarkCyan
+        Write-Host $env:CLAUDE_CODE_MAX_CONTEXT_TOKENS
+    }
+    Write-Host "  if auth warning: run  claude /logout  then relaunch" -ForegroundColor Yellow
 }
 
 $script:OrollamaRoot = Get-OrollamaRoot
@@ -70,14 +83,20 @@ function claude {
             Write-Host "orollama: proxy is up but missing $($script:OrollamaEnvFile)" -ForegroundColor Red
             return
         }
+        Import-OrollamaResolvedEnv
+
         $token = Get-OrollamaEnvValue $script:OrollamaEnvFile "PROXY_AUTH_TOKEN"
         $opus = Get-OrollamaEnvValue $script:OrollamaEnvFile "MODEL_OPUS"
         $sonnet = Get-OrollamaEnvValue $script:OrollamaEnvFile "MODEL_SONNET"
         $haiku = Get-OrollamaEnvValue $script:OrollamaEnvFile "MODEL_HAIKU"
+        if (-not $opus) { $opus = $env:OROLLAMA_MODEL_OPUS }
+        if (-not $sonnet) { $sonnet = $env:OROLLAMA_MODEL_SONNET }
+        if (-not $haiku) { $haiku = $env:OROLLAMA_MODEL_HAIKU }
 
         $env:ANTHROPIC_BASE_URL = $script:OrollamaProxyUrl
         $env:ANTHROPIC_API_KEY = ""
         $env:ANTHROPIC_AUTH_TOKEN = if ($token) { $token } else { "orollama" }
+        $env:CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY = "1"
         if ($opus) { $env:ANTHROPIC_DEFAULT_OPUS_MODEL = $opus }
         if ($sonnet) {
             $env:ANTHROPIC_DEFAULT_SONNET_MODEL = $sonnet
@@ -92,6 +111,7 @@ function claude {
         Remove-Item Env:ANTHROPIC_DEFAULT_OPUS_MODEL -ErrorAction SilentlyContinue
         Remove-Item Env:ANTHROPIC_DEFAULT_SONNET_MODEL -ErrorAction SilentlyContinue
         Remove-Item Env:ANTHROPIC_DEFAULT_HAIKU_MODEL -ErrorAction SilentlyContinue
+        Remove-Item Env:CLAUDE_CODE_MAX_CONTEXT_TOKENS -ErrorAction SilentlyContinue
         Write-Host "orollama: " -NoNewline -ForegroundColor Cyan
         Write-Host "proxy OFF" -NoNewline -ForegroundColor Yellow
         Write-Host " — launching Claude Code without local gateway"
