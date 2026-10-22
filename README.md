@@ -186,9 +186,9 @@ Copy [`.env.example`](.env.example) to `.env`.
 ```mermaid
 flowchart TD
   req[Incoming_model_string]
-  req --> p1{starts_with_ollama}
+  req --> p1{ollama_claude_or_ollama_prefix}
   p1 -->|yes| OL[Route_Ollama]
-  p1 -->|no| p2{starts_with_openrouter_or_has_slash}
+  p1 -->|no| p2{openrouter_claude_or_openrouter_or_slash}
   p2 -->|yes| OR[Route_OpenRouter]
   p2 -->|no| p3{alias_opus_sonnet_haiku}
   p3 -->|yes| mapped[Resolve_env_MODEL_star]
@@ -200,8 +200,8 @@ flowchart TD
 
 | Request model | Goes to |
 | --- | --- |
-| `ollama-claude/qwen3-coder` (or `ollama/…`) | Local Ollama as `qwen3-coder` |
-| `openrouter-claude/anthropic/claude-sonnet-4` (or `openrouter/…`) | OpenRouter as `anthropic/claude-sonnet-4` |
+| `ollama-claude/qwen3-coder` | Local Ollama as `qwen3-coder` (preferred; also `ollama/…`) |
+| `openrouter-claude/anthropic/claude-sonnet-4` | OpenRouter as `anthropic/claude-sonnet-4` (preferred; also `openrouter/…`) |
 | `deepseek/deepseek-r1:free` | OpenRouter (any `vendor/model` id) |
 | `qwen3-coder` | Ollama **if** that tag exists locally |
 | `claude-3-5-sonnet-latest` | Mapped via `MODEL_SONNET` |
@@ -374,18 +374,18 @@ sequenceDiagram
   P->>OR: GET /models
   P-->>App: merged list
 
-  App->>P: POST /api/chat model=openrouter/...
+  App->>P: POST /api/chat model=openrouter-claude/...
   P->>OR: POST /chat/completions
   OR-->>P: OpenAI SSE
   P-->>App: Ollama NDJSON
 
-  App->>P: POST /api/chat model=ollama/...
+  App->>P: POST /api/chat model=ollama-claude/...
   P->>OL: POST /api/chat
   OL-->>P: Ollama NDJSON
   P-->>App: passthrough
 ```
 
-Point the client at the proxy (not port 11434):
+Point the client at the proxy (not port 11434). `/api/tags` returns `ollama-claude/…` and `openrouter-claude/…` ids (legacy `ollama/` / `openrouter/` still route):
 
 ```bash
 export OLLAMA_HOST="http://127.0.0.1:8082"
@@ -393,7 +393,7 @@ export OLLAMA_HOST="http://127.0.0.1:8082"
 curl -s "$OLLAMA_HOST/api/tags" | jq '.models[].name' | head
 
 curl -s "$OLLAMA_HOST/api/chat" -d '{
-  "model": "ollama/qwen3-coder",
+  "model": "ollama-claude/qwen3-coder",
   "stream": false,
   "messages": [{"role":"user","content":"Say hi in one word"}]
 }' | jq .
@@ -402,7 +402,7 @@ curl -s "$OLLAMA_HOST/api/chat" -d '{
 curl -s "$OLLAMA_HOST/api/chat" \
   -H "Authorization: Bearer local-dev-token" \
   -d '{
-  "model": "openrouter/openai/gpt-oss-120b:free",
+  "model": "openrouter-claude/openai/gpt-oss-120b:free",
   "stream": false,
   "messages": [{"role":"user","content":"Say hi"}]
 }' | jq .
@@ -465,7 +465,7 @@ make install   # copies bin/orollama to ~/.local/bin
 | Claude Code still uses Anthropic login | `/logout`, set `ANTHROPIC_API_KEY=""`, relaunch |
 | `401 unauthorized` | Send `Authorization: Bearer $PROXY_AUTH_TOKEN` or unset `PROXY_AUTH_TOKEN` |
 | Empty OpenRouter models | Set `OPENROUTER_API_KEY`; check `curl …/healthz` |
-| Bare model name 404 | Prefix with `ollama/` or `openrouter/`, or pull the model in Ollama |
+| Bare model name 404 | Prefix with `ollama-claude/` or `openrouter-claude/` (legacy `ollama/` / `openrouter/` also work), or pull the model in Ollama |
 | `:free` models rate-limited | Expected; switch to a paid OpenRouter model id |
 | Port conflict | Change `PORT` in `.env` (leave Ollama on 11434) |
 
